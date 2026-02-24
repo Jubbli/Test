@@ -1,0 +1,2466 @@
+--[[
+╔══════════════════════════════════════════════════════════════════╗
+║         N O T H I N G   T H E R E   G U I                      ║
+║         Lobotomy Corporation — Aleph Class Threat               ║
+║         "Nothing is lurking in the darkness."                   ║
+╚══════════════════════════════════════════════════════════════════╝
+  PASTE INTO: A LocalScript inside StarterPlayerScripts
+            OR run via an executor in the local script context.
+  KEYBIND: Enable "RightShift" toggle in the Settings tab.
+--]]
+
+-- ════════════════════════════════════════════════════════════════
+-- SERVICES
+-- ════════════════════════════════════════════════════════════════
+local Players          = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService       = game:GetService("RunService")
+local TweenService     = game:GetService("TweenService")
+local SoundService     = game:GetService("SoundService")
+local Lighting         = game:GetService("Lighting")
+local Debris           = game:GetService("Debris")
+
+local Player    = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
+
+-- ════════════════════════════════════════════════════════════════
+-- COLOUR PALETTE  (Nothing There: void-black + blood-red)
+-- ════════════════════════════════════════════════════════════════
+local C = {
+    BG          = Color3.fromRGB(8,   5,   5),
+    Secondary   = Color3.fromRGB(16,  8,   8),
+    Accent      = Color3.fromRGB(139, 0,   0),
+    AccentBrt   = Color3.fromRGB(210, 40,  40),
+    Text        = Color3.fromRGB(225, 205, 205),
+    TextDim     = Color3.fromRGB(140, 110, 110),
+    TabActive   = Color3.fromRGB(90,  0,   0),
+    TabInactive = Color3.fromRGB(22,  9,   9),
+    Btn         = Color3.fromRGB(50,  5,   5),
+    BtnHov      = Color3.fromRGB(90,  15,  15),
+    Border      = Color3.fromRGB(90,  20,  20),
+    InputBG     = Color3.fromRGB(20,  7,   7),
+}
+
+-- ════════════════════════════════════════════════════════════════
+-- STATE
+-- ════════════════════════════════════════════════════════════════
+local S = {
+    ActiveTab      = "Home",
+    SpeedValue     = 50,
+    FlySpeed       = 50,
+    JumpPower      = 50,
+    Volume         = 0.5,
+    KeybindEnabled = false,
+    DragLocked     = false,
+    InfiniteJump   = false,
+    Fly            = false,
+    NoClip         = false,
+    FullBright     = false,
+    ESP            = false,
+    Invisible      = false,
+    Rainbow        = false,
+    Spin           = false,
+    AntiVoid       = false,
+    FreezeSelf     = false,
+    SpeedOn        = false,
+    FlyBV          = nil,
+    FlyBG          = nil,
+    CustomR        = 8,
+    CustomG        = 5,
+    CustomB        = 5,
+    SizeVal        = 1,
+    TimeHour       = 14,
+}
+
+-- ════════════════════════════════════════════════════════════════
+-- HELPERS
+-- ════════════════════════════════════════════════════════════════
+local function New(class, props, parent)
+    local inst = Instance.new(class)
+    for k, v in pairs(props) do
+        inst[k] = v
+    end
+    if parent then inst.Parent = parent end
+    return inst
+end
+
+local function Corner(r, p)
+    New("UICorner", {CornerRadius = UDim.new(0, r)}, p)
+end
+
+local function Stroke(col, thickness, p)
+    New("UIStroke", {Color = col, Thickness = thickness}, p)
+end
+
+local function Pad(t, l, r, b, p)
+    New("UIPadding", {
+        PaddingTop    = UDim.new(0, t),
+        PaddingLeft   = UDim.new(0, l),
+        PaddingRight  = UDim.new(0, r),
+        PaddingBottom = UDim.new(0, b),
+    }, p)
+end
+
+local function ListLayout(spacing, p)
+    New("UIListLayout", {
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding   = UDim.new(0, spacing),
+    }, p)
+end
+
+local function hoverBtn(btn, normal, hover)
+    btn.MouseEnter:Connect(function() btn.BackgroundColor3 = hover end)
+    btn.MouseLeave:Connect(function() btn.BackgroundColor3 = normal end)
+end
+
+local function getChar()
+    return Player.Character
+end
+
+local function getHum(char)
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function getHRP(char)
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- SCREEN GUI + MAIN FRAME
+-- ════════════════════════════════════════════════════════════════
+local ScreenGui = New("ScreenGui", {
+    Name           = "NothingThereGUI",
+    ResetOnSpawn   = false,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, PlayerGui)
+
+local MainFrame = New("Frame", {
+    Name             = "MainFrame",
+    Size             = UDim2.new(0, 680, 0, 470),
+    Position         = UDim2.new(0.5, -340, 0.5, -235),
+    BackgroundColor3 = C.BG,
+    BorderSizePixel  = 0,
+    ClipsDescendants = false,
+}, ScreenGui)
+Corner(8, MainFrame)
+Stroke(C.Accent, 1.5, MainFrame)
+
+-- Title Bar
+local TitleBar = New("Frame", {
+    Name             = "TitleBar",
+    Size             = UDim2.new(1, 0, 0, 36),
+    BackgroundColor3 = C.Secondary,
+    BorderSizePixel  = 0,
+}, MainFrame)
+Corner(8, TitleBar)
+Stroke(Color3.fromRGB(70, 10, 10), 0.8, TitleBar)
+
+local TitleLabel = New("TextLabel", {
+    Text                   = "◈  N O T H I N G   T H E R E  ◈   |   Aleph Class",
+    Size                   = UDim2.new(1, -48, 1, 0),
+    Position               = UDim2.new(0, 12, 0, 0),
+    BackgroundTransparency = 1,
+    TextColor3             = C.AccentBrt,
+    Font                   = Enum.Font.GothamBold,
+    TextSize               = 12,
+    TextXAlignment         = Enum.TextXAlignment.Left,
+}, TitleBar)
+
+local CloseBtn = New("TextButton", {
+    Text             = "X",
+    Size             = UDim2.new(0, 28, 0, 24),
+    Position         = UDim2.new(1, -33, 0, 6),
+    BackgroundColor3 = C.Accent,
+    TextColor3       = Color3.new(1, 1, 1),
+    Font             = Enum.Font.GothamBold,
+    TextSize         = 13,
+    BorderSizePixel  = 0,
+}, TitleBar)
+Corner(4, CloseBtn)
+hoverBtn(CloseBtn, C.Accent, C.AccentBrt)
+CloseBtn.MouseButton1Click:Connect(function()
+    MainFrame.Visible = false
+end)
+
+-- Dragging
+local dragging, dragStart, startPos = false, nil, nil
+TitleBar.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 and not S.DragLocked then
+        dragging  = true
+        dragStart = inp.Position
+        startPos  = MainFrame.Position
+    end
+end)
+TitleBar.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+UserInputService.InputChanged:Connect(function(inp)
+    if dragging and inp.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = inp.Position - dragStart
+        MainFrame.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+-- Sidebar
+local Sidebar = New("Frame", {
+    Size             = UDim2.new(0, 125, 1, -36),
+    Position         = UDim2.new(0, 0, 0, 36),
+    BackgroundColor3 = C.Secondary,
+    BorderSizePixel  = 0,
+    ClipsDescendants = true,
+}, MainFrame)
+ListLayout(4, Sidebar)
+Pad(6, 5, 5, 6, Sidebar)
+
+-- Divider line
+New("Frame", {
+    Size             = UDim2.new(0, 1, 1, -36),
+    Position         = UDim2.new(0, 124, 0, 36),
+    BackgroundColor3 = C.Accent,
+    BorderSizePixel  = 0,
+}, MainFrame)
+
+-- Content Area
+local ContentArea = New("Frame", {
+    Size                   = UDim2.new(1, -125, 1, -36),
+    Position               = UDim2.new(0, 125, 0, 36),
+    BackgroundTransparency = 1,
+    ClipsDescendants       = true,
+}, MainFrame)
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB SYSTEM
+-- ════════════════════════════════════════════════════════════════
+local TABS = {
+    { name = "Home",        icon = ">" },
+    { name = "Scripts",     icon = "*" },
+    { name = "Soundboard",  icon = "~" },
+    { name = "Background",  icon = "o" },
+    { name = "Abnormality", icon = "@" },
+    { name = "Ordeal",      icon = "%" },
+    { name = "TLB",         icon = "!" },
+    { name = "Settings",    icon = "=" },
+}
+
+local TabBtns   = {}
+local TabFrames = {}
+
+for _, t in ipairs(TABS) do
+    local btn = New("TextButton", {
+        Text             = t.icon .. "  " .. t.name,
+        Size             = UDim2.new(1, 0, 0, 40),
+        BackgroundColor3 = C.TabInactive,
+        TextColor3       = C.TextDim,
+        Font             = Enum.Font.Gotham,
+        TextSize         = 11,
+        TextXAlignment   = Enum.TextXAlignment.Left,
+        BorderSizePixel  = 0,
+    }, Sidebar)
+    Corner(5, btn)
+    Pad(0, 10, 0, 0, btn)
+    TabBtns[t.name] = btn
+
+    local frame = New("Frame", {
+        Size                   = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Visible                = false,
+        ClipsDescendants       = true,
+    }, ContentArea)
+    TabFrames[t.name] = frame
+
+    local tname = t.name
+    btn.MouseButton1Click:Connect(function()
+        for n, f in pairs(TabFrames) do f.Visible = (n == tname) end
+        for n, b in pairs(TabBtns) do
+            b.BackgroundColor3 = (n == tname) and C.TabActive   or C.TabInactive
+            b.TextColor3       = (n == tname) and C.AccentBrt   or C.TextDim
+        end
+        S.ActiveTab = tname
+    end)
+end
+
+local function showTab(name)
+    for n, f in pairs(TabFrames) do f.Visible = (n == name) end
+    for n, b in pairs(TabBtns) do
+        b.BackgroundColor3 = (n == name) and C.TabActive or C.TabInactive
+        b.TextColor3       = (n == name) and C.AccentBrt or C.TextDim
+    end
+    S.ActiveTab = name
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- WIDGET HELPERS
+-- ════════════════════════════════════════════════════════════════
+local function makeScrollFrame(parent)
+    local sf = New("ScrollingFrame", {
+        Size                   = UDim2.new(1, -8, 1, -8),
+        Position               = UDim2.new(0, 4, 0, 4),
+        BackgroundTransparency = 1,
+        BorderSizePixel        = 0,
+        ScrollBarThickness     = 3,
+        ScrollBarImageColor3   = C.Accent,
+        CanvasSize             = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize    = Enum.AutomaticSize.Y,
+    }, parent)
+    ListLayout(6, sf)
+    Pad(5, 5, 10, 5, sf)
+    return sf
+end
+
+local function makeSectionLabel(parent, text, order)
+    local lbl = New("TextLabel", {
+        Text             = "  -- " .. text .. " --",
+        Size             = UDim2.new(1, 0, 0, 24),
+        BackgroundColor3 = Color3.fromRGB(28, 5, 5),
+        TextColor3       = C.Accent,
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 10,
+        TextXAlignment   = Enum.TextXAlignment.Left,
+        BorderSizePixel  = 0,
+        LayoutOrder      = order or 0,
+    }, parent)
+    Corner(4, lbl)
+    return lbl
+end
+
+local function makeToggle(parent, title, desc, callback, order)
+    local h = desc and 52 or 38
+    local card = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, h),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = order or 0,
+    }, parent)
+    Corner(6, card)
+    Stroke(C.Border, 0.5, card)
+
+    New("TextLabel", {
+        Text                   = title,
+        Size                   = UDim2.new(1, -60, 0, 20),
+        Position               = UDim2.new(0, 10, 0, desc and 6 or 9),
+        BackgroundTransparency = 1,
+        TextColor3             = C.Text,
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 11,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, card)
+
+    if desc then
+        New("TextLabel", {
+            Text                   = desc,
+            Size                   = UDim2.new(1, -60, 0, 16),
+            Position               = UDim2.new(0, 10, 0, 28),
+            BackgroundTransparency = 1,
+            TextColor3             = C.TextDim,
+            Font                   = Enum.Font.Gotham,
+            TextSize               = 9,
+            TextXAlignment         = Enum.TextXAlignment.Left,
+        }, card)
+    end
+
+    local toggled = false
+    local tb = New("TextButton", {
+        Text             = "OFF",
+        Size             = UDim2.new(0, 42, 0, 20),
+        Position         = UDim2.new(1, -52, 0, h / 2 - 10),
+        BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+        TextColor3       = C.TextDim,
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 9,
+        BorderSizePixel  = 0,
+    }, card)
+    Corner(4, tb)
+
+    tb.MouseButton1Click:Connect(function()
+        toggled = not toggled
+        tb.Text             = toggled and "ON"  or "OFF"
+        tb.BackgroundColor3 = toggled and C.Accent or Color3.fromRGB(50, 50, 50)
+        tb.TextColor3       = toggled and Color3.fromRGB(255, 200, 200) or C.TextDim
+        callback(toggled)
+    end)
+    return card, tb
+end
+
+local function makeButton(parent, text, callback, order)
+    local btn = New("TextButton", {
+        Text             = text,
+        Size             = UDim2.new(1, 0, 0, 34),
+        BackgroundColor3 = C.Btn,
+        TextColor3       = C.Text,
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 11,
+        BorderSizePixel  = 0,
+        LayoutOrder      = order or 0,
+    }, parent)
+    Corner(6, btn)
+    Stroke(C.Border, 0.5, btn)
+    hoverBtn(btn, C.Btn, C.BtnHov)
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+
+local function makeInput(parent, labelText, placeholder, order)
+    local card = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 56),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = order or 0,
+    }, parent)
+    Corner(6, card)
+    Stroke(C.Border, 0.5, card)
+
+    New("TextLabel", {
+        Text                   = labelText,
+        Size                   = UDim2.new(1, -10, 0, 20),
+        Position               = UDim2.new(0, 10, 0, 5),
+        BackgroundTransparency = 1,
+        TextColor3             = C.Text,
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 11,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, card)
+
+    local box = New("TextBox", {
+        PlaceholderText   = placeholder,
+        Text              = "",
+        Size              = UDim2.new(1, -20, 0, 22),
+        Position          = UDim2.new(0, 10, 0, 28),
+        BackgroundColor3  = C.InputBG,
+        TextColor3        = C.Text,
+        PlaceholderColor3 = C.TextDim,
+        Font              = Enum.Font.Gotham,
+        TextSize          = 11,
+        BorderSizePixel   = 0,
+        ClearTextOnFocus  = false,
+    }, card)
+    Corner(4, box)
+    Stroke(C.Border, 0.5, box)
+    return card, box
+end
+
+local function makeSlider(parent, labelText, minV, maxV, stepV, initV, callback, order)
+    local val = initV
+    local card = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 54),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = order or 0,
+    }, parent)
+    Corner(6, card)
+    Stroke(C.Border, 0.5, card)
+
+    local lbl = New("TextLabel", {
+        Text                   = labelText .. ": " .. tostring(val),
+        Size                   = UDim2.new(1, -10, 0, 20),
+        Position               = UDim2.new(0, 10, 0, 5),
+        BackgroundTransparency = 1,
+        TextColor3             = C.Text,
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 11,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, card)
+
+    local track = New("Frame", {
+        Size             = UDim2.new(1, -20, 0, 6),
+        Position         = UDim2.new(0, 10, 0, 36),
+        BackgroundColor3 = Color3.fromRGB(40, 15, 15),
+        BorderSizePixel  = 0,
+    }, card)
+    Corner(3, track)
+
+    local initRel = (val - minV) / (maxV - minV)
+    local fill = New("Frame", {
+        Size             = UDim2.new(initRel, 0, 1, 0),
+        BackgroundColor3 = C.Accent,
+        BorderSizePixel  = 0,
+    }, track)
+    Corner(3, fill)
+
+    local thumb = New("TextButton", {
+        Text             = "",
+        Size             = UDim2.new(0, 14, 0, 14),
+        Position         = UDim2.new(initRel, -7, 0.5, -7),
+        BackgroundColor3 = C.AccentBrt,
+        BorderSizePixel  = 0,
+    }, track)
+    Corner(7, thumb)
+
+    local sliding = false
+    thumb.MouseButton1Down:Connect(function() sliding = true end)
+    UserInputService.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            sliding = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(inp)
+        if sliding and inp.UserInputType == Enum.UserInputType.MouseMovement then
+            local abs = track.AbsolutePosition
+            local sz  = track.AbsoluteSize
+            local rel = math.clamp((inp.Position.X - abs.X) / sz.X, 0, 1)
+            val = math.round((minV + rel * (maxV - minV)) / stepV) * stepV
+            fill.Size      = UDim2.new(rel, 0, 1, 0)
+            thumb.Position = UDim2.new(rel, -7, 0.5, -7)
+            lbl.Text       = labelText .. ": " .. tostring(val)
+            callback(val)
+        end
+    end)
+
+    return card
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB 1: HOME
+-- ════════════════════════════════════════════════════════════════
+do
+    local f = TabFrames["Home"]
+
+    local lorelines = {
+        "================================",
+        "",
+        '  "Nothing is lurking in the dark."',
+        '  "Nothing is watching behind glass."',
+        '  "Nothing waits in the empty wing."',
+        "",
+        "  +--------------------------------+",
+        "  | FACILITY LOG -- DAY ██████     |",
+        "  | ENTITY: ████████████           |",
+        "  | THREAT CLASS: ALEPH            |",
+        "  | QLIPHOTH COUNTER: 0/?          |",
+        "  | STATUS: [ REDACTED ]           |",
+        "  +--------------------------------+",
+        "",
+        "  WARNING: Do not look at it.",
+        "  WARNING: Do not say its name.",
+        "",
+        "  It was never there.",
+        "  It was never there.",
+        "",
+        "================================",
+    }
+
+    local lore = New("TextLabel", {
+        Text                   = table.concat(lorelines, "\n"),
+        Size                   = UDim2.new(1, 0, 1, -55),
+        BackgroundTransparency = 1,
+        TextColor3             = C.TextDim,
+        Font                   = Enum.Font.Code,
+        TextSize               = 11,
+        TextXAlignment         = Enum.TextXAlignment.Center,
+        TextYAlignment         = Enum.TextYAlignment.Center,
+    }, f)
+
+    local statusBar = New("Frame", {
+        Size             = UDim2.new(1, -16, 0, 40),
+        Position         = UDim2.new(0, 8, 1, -48),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+    }, f)
+    Corner(6, statusBar)
+    Stroke(C.Accent, 0.8, statusBar)
+
+    New("TextLabel", {
+        Text                   = "QLIPHOTH: STABLE   |   MANAGER: " .. Player.Name:upper() .. "   |   FACILITY: ONLINE",
+        Size                   = UDim2.new(1, -10, 1, 0),
+        Position               = UDim2.new(0, 8, 0, 0),
+        BackgroundTransparency = 1,
+        TextColor3             = C.Accent,
+        Font                   = Enum.Font.Code,
+        TextSize               = 10,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, statusBar)
+
+    TweenService:Create(
+        lore,
+        TweenInfo.new(3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+        { TextTransparency = 0.4 }
+    ):Play()
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB 2: SCRIPTS
+-- ════════════════════════════════════════════════════════════════
+do
+    local scroll = makeScrollFrame(TabFrames["Scripts"])
+
+    makeSectionLabel(scroll, "MOVEMENT", 1)
+
+    makeToggle(scroll, "Speed Boost", "Custom walk speed (configure in Settings)", function(on)
+        S.SpeedOn = on
+        local char = getChar()
+        local hum  = getHum(char)
+        if hum then hum.WalkSpeed = on and S.SpeedValue or 16 end
+    end, 2)
+
+    makeToggle(scroll, "Infinite Jump", "Jump again while already airborne", function(on)
+        S.InfiniteJump = on
+    end, 3)
+
+    makeToggle(scroll, "Fly", "WASD + Space/Ctrl fly, camera-relative", function(on)
+        S.Fly = on
+        if not on then
+            if S.FlyBV then S.FlyBV:Destroy(); S.FlyBV = nil end
+            if S.FlyBG then S.FlyBG:Destroy(); S.FlyBG = nil end
+            local char = getChar()
+            local hum  = getHum(char)
+            if hum then hum.PlatformStand = false end
+        end
+    end, 4)
+
+    makeToggle(scroll, "No Clip", "Phase through every solid part", function(on)
+        S.NoClip = on
+    end, 5)
+
+    makeSectionLabel(scroll, "VISUAL", 6)
+
+    makeToggle(scroll, "Full Bright", "Max ambient, see in total darkness", function(on)
+        S.FullBright = on
+        Lighting.Brightness = on and 10 or 1
+        Lighting.Ambient    = on and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(127, 127, 127)
+    end, 7)
+
+    makeToggle(scroll, "ESP — Player Outlines", "Red highlight boxes around all other players", function(on)
+        S.ESP = on
+        if not on then
+            for _, v in ipairs(workspace:GetDescendants()) do
+                if v:IsA("SelectionBox") and v.Name == "ESP_Box" then
+                    v:Destroy()
+                end
+            end
+        end
+    end, 8)
+
+    makeSectionLabel(scroll, "UTILITY", 9)
+
+    makeButton(scroll, "Reset Character", function()
+        local char = getChar()
+        local hum  = getHum(char)
+        if hum then hum.Health = 0 end
+    end, 10)
+
+    makeButton(scroll, "Rejoin Server", function()
+        pcall(function()
+            game:GetService("TeleportService"):Teleport(game.PlaceId, Player)
+        end)
+    end, 11)
+
+    makeButton(scroll, "Copy User ID to Clipboard", function()
+        if setclipboard then
+            setclipboard(tostring(Player.UserId))
+        end
+    end, 12)
+
+    makeButton(scroll, "Teleport to Origin (0,10,0)", function()
+        local char = getChar()
+        local hrp  = getHRP(char)
+        if hrp then hrp.CFrame = CFrame.new(0, 10, 0) end
+    end, 13)
+
+    makeButton(scroll, "Print All Players to Console", function()
+        for _, p in ipairs(Players:GetPlayers()) do
+            print(p.Name, "|", p.UserId)
+        end
+    end, 14)
+
+    -- ─── TELEPORT TO PLAYER ────────────────────────────────────
+    -- Live-updating list of every player in the server.
+    -- Click a name to teleport your character directly on top of
+    -- them. Refresh button re-scans the server. Shows distance
+    -- so you know how far each player is before jumping.
+    -- ──────────────────────────────────────────────────────────
+    makeSectionLabel(scroll, "TELEPORT TO PLAYER", 15)
+
+    local tpCard = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 180),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = 16,
+    }, scroll)
+    Corner(6, tpCard)
+    Stroke(C.Border, 0.5, tpCard)
+
+    local tpHeader = New("TextLabel", {
+        Text                   = "Click a player to teleport:",
+        Size                   = UDim2.new(1, -10, 0, 18),
+        Position               = UDim2.new(0, 8, 0, 4),
+        BackgroundTransparency = 1,
+        TextColor3             = C.TextDim,
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 10,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, tpCard)
+
+    local tpScroll = New("ScrollingFrame", {
+        Size                   = UDim2.new(1, -10, 1, -44),
+        Position               = UDim2.new(0, 5, 0, 24),
+        BackgroundTransparency = 1,
+        BorderSizePixel        = 0,
+        ScrollBarThickness     = 3,
+        ScrollBarImageColor3   = C.Accent,
+        CanvasSize             = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize    = Enum.AutomaticSize.Y,
+    }, tpCard)
+    ListLayout(3, tpScroll)
+
+    local tpFeedback = New("TextLabel", {
+        Text                   = "",
+        Size                   = UDim2.new(1, -10, 0, 16),
+        Position               = UDim2.new(0, 8, 1, -18),
+        BackgroundTransparency = 1,
+        TextColor3             = C.AccentBrt,
+        Font                   = Enum.Font.Code,
+        TextSize               = 9,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, tpCard)
+
+    local function buildTpList()
+        -- Clear existing rows
+        for _, ch in ipairs(tpScroll:GetChildren()) do
+            if ch:IsA("TextButton") or ch:IsA("Frame") then ch:Destroy() end
+        end
+
+        local myHRP = getHRP(getChar())
+
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr == Player then continue end
+
+            local pChar = plr.Character
+            local pHRP  = getHRP(pChar)
+            local dist  = "?"
+            if pHRP and myHRP then
+                dist = tostring(math.floor((pHRP.Position - myHRP.Position).Magnitude))
+            end
+
+            local row = New("TextButton", {
+                Text             = "",
+                Size             = UDim2.new(1, -6, 0, 30),
+                BackgroundColor3 = C.Btn,
+                BorderSizePixel  = 0,
+            }, tpScroll)
+            Corner(4, row)
+            Stroke(C.Border, 0.4, row)
+
+            New("TextLabel", {
+                Text                   = plr.Name,
+                Size                   = UDim2.new(0.6, 0, 1, 0),
+                Position               = UDim2.new(0, 8, 0, 0),
+                BackgroundTransparency = 1,
+                TextColor3             = C.Text,
+                Font                   = Enum.Font.GothamBold,
+                TextSize               = 11,
+                TextXAlignment         = Enum.TextXAlignment.Left,
+            }, row)
+
+            local distLbl = New("TextLabel", {
+                Text                   = dist .. " studs",
+                Size                   = UDim2.new(0.38, 0, 1, 0),
+                Position               = UDim2.new(0.62, 0, 0, 0),
+                BackgroundTransparency = 1,
+                TextColor3             = C.TextDim,
+                Font                   = Enum.Font.Code,
+                TextSize               = 9,
+                TextXAlignment         = Enum.TextXAlignment.Right,
+            }, row)
+
+            hoverBtn(row, C.Btn, C.BtnHov)
+
+            local pName = plr.Name
+            row.MouseButton1Click:Connect(function()
+                local target = Players:FindFirstChild(pName)
+                if not target then
+                    tpFeedback.Text = pName .. " has left the server."
+                    return
+                end
+                local tChar = target.Character
+                local tHRP  = getHRP(tChar)
+                local myChar = getChar()
+                local myHRP2 = getHRP(myChar)
+                if tHRP and myHRP2 then
+                    -- Offset slightly so you don't clip inside them
+                    myHRP2.CFrame = tHRP.CFrame * CFrame.new(0, 0, -3)
+                    tpFeedback.Text = "Teleported to " .. pName .. "!"
+                    TweenService:Create(tpFeedback,
+                        TweenInfo.new(2, Enum.EasingStyle.Linear),
+                        {TextTransparency = 1}
+                    ):Play()
+                    task.delay(2.1, function() tpFeedback.TextTransparency = 0 end)
+                else
+                    tpFeedback.Text = pName .. " has no character loaded."
+                end
+            end)
+        end
+
+        if #Players:GetPlayers() <= 1 then
+            New("TextLabel", {
+                Text                   = "No other players in server.",
+                Size                   = UDim2.new(1, 0, 0, 30),
+                BackgroundTransparency = 1,
+                TextColor3             = C.TextDim,
+                Font                   = Enum.Font.Gotham,
+                TextSize               = 11,
+                TextXAlignment         = Enum.TextXAlignment.Center,
+            }, tpScroll)
+        end
+    end
+
+    -- Refresh button
+    local refreshBtn = New("TextButton", {
+        Text             = "Refresh Player List",
+        Size             = UDim2.new(1, -10, 0, 16),
+        Position         = UDim2.new(0, 5, 0, 162),
+        BackgroundColor3 = C.Accent,
+        TextColor3       = Color3.new(1,1,1),
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 9,
+        BorderSizePixel  = 0,
+    }, tpCard)
+    Corner(4, refreshBtn)
+    refreshBtn.MouseButton1Click:Connect(buildTpList)
+
+    -- Build list on first open, and auto-refresh when players join/leave
+    buildTpList()
+    Players.PlayerAdded:Connect(buildTpList)
+    Players.PlayerRemoving:Connect(function()
+        task.wait(0.5)  -- brief wait so the player is fully removed first
+        buildTpList()
+    end)
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB 3: SOUNDBOARD
+-- ════════════════════════════════════════════════════════════════
+do
+    local scroll = makeScrollFrame(TabFrames["Soundboard"])
+    local activeSound = nil
+
+    local function stopActive()
+        if activeSound then
+            pcall(function() activeSound:Stop() end)
+            pcall(function() activeSound:Destroy() end)
+            activeSound = nil
+        end
+    end
+
+    makeSectionLabel(scroll, "CUSTOM SOUND PLAYER", 1)
+
+    local _, idBox = makeInput(scroll, "Sound ID", "Enter Roblox sound asset ID number", 2)
+
+    makeSlider(scroll, "Volume", 0, 100, 5, 50, function(v)
+        S.Volume = v / 100
+        if activeSound then
+            pcall(function() activeSound.Volume = S.Volume end)
+        end
+    end, 3)
+
+    makeButton(scroll, "Play - Local Only (you hear it)", function()
+        local id = idBox.Text:match("%d+")
+        if not id then return end
+        stopActive()
+        local s = New("Sound", {
+            SoundId = "rbxassetid://" .. id,
+            Volume  = S.Volume,
+            Looped  = false,
+        }, SoundService)
+        s:Play()
+        activeSound = s
+    end, 4)
+
+    makeButton(scroll, "Play - Workspace (server audible)", function()
+        local id = idBox.Text:match("%d+")
+        if not id then return end
+        local s = New("Sound", {
+            SoundId            = "rbxassetid://" .. id,
+            Volume             = S.Volume,
+            RollOffMaxDistance = 1e6,
+            Looped             = false,
+        }, workspace)
+        s:Play()
+        Debris:AddItem(s, 300)
+    end, 5)
+
+    makeButton(scroll, "Attach to Character - VC Soundboard Mode (looped)", function()
+        local id  = idBox.Text:match("%d+")
+        if not id then return end
+        local char = getChar()
+        local hrp  = getHRP(char)
+        if not hrp then return end
+        stopActive()
+        local s = New("Sound", {
+            SoundId            = "rbxassetid://" .. id,
+            Volume             = S.Volume,
+            Looped             = true,
+            RollOffMaxDistance = 1e5,
+        }, hrp)
+        s:Play()
+        activeSound = s
+    end, 6)
+
+    makeButton(scroll, "Stop All Sounds", function()
+        stopActive()
+        for _, s in ipairs(workspace:GetDescendants()) do
+            if s:IsA("Sound") then pcall(function() s:Stop(); s:Destroy() end) end
+        end
+        for _, s in ipairs(SoundService:GetDescendants()) do
+            if s:IsA("Sound") then pcall(function() s:Stop(); s:Destroy() end) end
+        end
+        local char = getChar()
+        if char then
+            for _, s in ipairs(char:GetDescendants()) do
+                if s:IsA("Sound") then pcall(function() s:Stop(); s:Destroy() end) end
+            end
+        end
+    end, 7)
+
+    makeSectionLabel(scroll, "PRESET SOUNDBOARD  (click Play)", 8)
+
+    local presets = {
+        { name = "Nothing There OST - Myron",  id = "531635230"  },
+        { name = "Lobotomy Corp - Hesitation", id = "468523271"  },
+        { name = "Encounter Theme",            id = "1837453233" },
+        { name = "Air Horn",                   id = "9120386436" },
+        { name = "Sad Violin",                 id = "144135585"  },
+        { name = "Bruh Sound Effect",          id = "131036263"  },
+        { name = "Suspense Sting",             id = "172688390"  },
+        { name = "Rickroll",                   id = "142376088"  },
+        { name = "Vine Boom",                  id = "5153845638" },
+        { name = "Error Malfunction",          id = "138105663"  },
+    }
+
+    for i, p in ipairs(presets) do
+        local row = New("Frame", {
+            Size             = UDim2.new(1, 0, 0, 34),
+            BackgroundColor3 = C.Secondary,
+            BorderSizePixel  = 0,
+            LayoutOrder      = 8 + i,
+        }, scroll)
+        Corner(5, row)
+        Stroke(C.Border, 0.5, row)
+
+        New("TextLabel", {
+            Text                   = "~ " .. p.name,
+            Size                   = UDim2.new(1, -90, 1, 0),
+            Position               = UDim2.new(0, 8, 0, 0),
+            BackgroundTransparency = 1,
+            TextColor3             = C.Text,
+            Font                   = Enum.Font.Gotham,
+            TextSize               = 11,
+            TextXAlignment         = Enum.TextXAlignment.Left,
+        }, row)
+
+        local playBtn = New("TextButton", {
+            Text             = "Play",
+            Size             = UDim2.new(0, 60, 0, 22),
+            Position         = UDim2.new(1, -70, 0, 6),
+            BackgroundColor3 = C.Accent,
+            TextColor3       = Color3.new(1, 1, 1),
+            Font             = Enum.Font.GothamBold,
+            TextSize         = 10,
+            BorderSizePixel  = 0,
+        }, row)
+        Corner(4, playBtn)
+        hoverBtn(playBtn, C.Accent, C.AccentBrt)
+
+        local pid = p.id
+        playBtn.MouseButton1Click:Connect(function()
+            local s = New("Sound", {
+                SoundId = "rbxassetid://" .. pid,
+                Volume  = S.Volume,
+            }, SoundService)
+            s:Play()
+            Debris:AddItem(s, 300)
+        end)
+    end
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB 4: BACKGROUND
+-- ════════════════════════════════════════════════════════════════
+do
+    local scroll = makeScrollFrame(TabFrames["Background"])
+
+    makeSectionLabel(scroll, "PRESET THEMES", 1)
+
+    local themes = {
+        { name = "Nothing There (Default)",  col = Color3.fromRGB(8,   5,   5)   },
+        { name = "Abyss Black",              col = Color3.fromRGB(0,   0,   0)   },
+        { name = "Blood Crimson",            col = Color3.fromRGB(50,  0,   0)   },
+        { name = "Deep Void Purple",         col = Color3.fromRGB(10,  0,   20)  },
+        { name = "Ashen Wasteland",          col = Color3.fromRGB(22,  22,  22)  },
+        { name = "Forest Night",             col = Color3.fromRGB(4,   14,  4)   },
+        { name = "Midnight Ocean",           col = Color3.fromRGB(0,   8,   28)  },
+        { name = "Pale Calamity White",      col = Color3.fromRGB(235, 230, 230) },
+        { name = "Neon Corruption",          col = Color3.fromRGB(5,   0,   30)  },
+    }
+
+    for i, t in ipairs(themes) do
+        local row = New("Frame", {
+            Size             = UDim2.new(1, 0, 0, 36),
+            BackgroundColor3 = C.Secondary,
+            BorderSizePixel  = 0,
+            LayoutOrder      = i,
+        }, scroll)
+        Corner(5, row)
+        Stroke(C.Border, 0.5, row)
+
+        local swatch = New("Frame", {
+            Size             = UDim2.new(0, 26, 0, 26),
+            Position         = UDim2.new(0, 5, 0, 5),
+            BackgroundColor3 = t.col,
+            BorderSizePixel  = 0,
+        }, row)
+        Corner(4, swatch)
+        Stroke(Color3.fromRGB(150, 150, 150), 0.5, swatch)
+
+        New("TextLabel", {
+            Text                   = t.name,
+            Size                   = UDim2.new(1, -110, 1, 0),
+            Position               = UDim2.new(0, 38, 0, 0),
+            BackgroundTransparency = 1,
+            TextColor3             = C.Text,
+            Font                   = Enum.Font.Gotham,
+            TextSize               = 11,
+            TextXAlignment         = Enum.TextXAlignment.Left,
+        }, row)
+
+        local applyBtn = New("TextButton", {
+            Text             = "Apply",
+            Size             = UDim2.new(0, 52, 0, 22),
+            Position         = UDim2.new(1, -60, 0, 7),
+            BackgroundColor3 = C.Accent,
+            TextColor3       = Color3.new(1, 1, 1),
+            Font             = Enum.Font.GothamBold,
+            TextSize         = 10,
+            BorderSizePixel  = 0,
+        }, row)
+        Corner(4, applyBtn)
+        hoverBtn(applyBtn, C.Accent, C.AccentBrt)
+
+        local tcol = t.col
+        applyBtn.MouseButton1Click:Connect(function()
+            MainFrame.BackgroundColor3 = tcol
+        end)
+    end
+
+    makeSectionLabel(scroll, "CUSTOM RGB", 12)
+
+    makeSlider(scroll, "Red",   0, 255, 1, 8, function(v) S.CustomR = v end, 13)
+    makeSlider(scroll, "Green", 0, 255, 1, 5, function(v) S.CustomG = v end, 14)
+    makeSlider(scroll, "Blue",  0, 255, 1, 5, function(v) S.CustomB = v end, 15)
+
+    makeButton(scroll, "Apply Custom RGB Color", function()
+        MainFrame.BackgroundColor3 = Color3.fromRGB(S.CustomR, S.CustomG, S.CustomB)
+    end, 16)
+
+    makeSectionLabel(scroll, "TRANSPARENCY", 17)
+
+    makeSlider(scroll, "BG Transparency", 0, 90, 5, 0, function(v)
+        MainFrame.BackgroundTransparency = v / 100
+    end, 18)
+
+    makeSectionLabel(scroll, "BORDER COLOR", 19)
+
+    local borderPresets = {
+        { name = "Blood Red (Default)",    col = C.Accent                       },
+        { name = "Gold",                   col = Color3.fromRGB(220, 180, 0)    },
+        { name = "Cyan",                   col = Color3.fromRGB(0,   200, 220)  },
+        { name = "White",                  col = Color3.fromRGB(255, 255, 255)  },
+        { name = "None",                   col = Color3.fromRGB(0,   0,   0)    },
+    }
+
+    for i, bc in ipairs(borderPresets) do
+        local bBtn = New("TextButton", {
+            Text             = "  " .. bc.name,
+            Size             = UDim2.new(1, 0, 0, 30),
+            BackgroundColor3 = C.Btn,
+            TextColor3       = C.Text,
+            Font             = Enum.Font.Gotham,
+            TextSize         = 11,
+            TextXAlignment   = Enum.TextXAlignment.Left,
+            BorderSizePixel  = 0,
+            LayoutOrder      = 19 + i,
+        }, scroll)
+        Corner(5, bBtn)
+        Stroke(bc.col, 1, bBtn)
+        hoverBtn(bBtn, C.Btn, C.BtnHov)
+
+        local bcol = bc.col
+        bBtn.MouseButton1Click:Connect(function()
+            for _, child in ipairs(MainFrame:GetChildren()) do
+                if child:IsA("UIStroke") then child.Color = bcol end
+            end
+        end)
+    end
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB 5: ABNORMALITY (10 Unique Features)
+-- ════════════════════════════════════════════════════════════════
+do
+    local scroll = makeScrollFrame(TabFrames["Abnormality"])
+
+    makeSectionLabel(scroll, "ALEPH-CLASS ABILITIES", 1)
+
+    -- 1. THE MASK
+    makeToggle(scroll, "[1] THE MASK", "Make your character fully invisible", function(on)
+        S.Invisible = on
+        local char = getChar()
+        if not char then return end
+        for _, v in ipairs(char:GetDescendants()) do
+            if v:IsA("BasePart") then
+                v.LocalTransparencyModifier = on and 1 or 0
+            end
+        end
+    end, 2)
+
+    -- 2. SPECTRUM SHIFT
+    makeToggle(scroll, "[2] SPECTRUM SHIFT", "Character cycles full RGB rainbow colors", function(on)
+        S.Rainbow = on
+        if not on then
+            local char = getChar()
+            if char then
+                for _, p in ipairs(char:GetDescendants()) do
+                    if p:IsA("BasePart") then
+                        p.Color = Color3.fromRGB(163, 162, 165)
+                    end
+                end
+            end
+        end
+    end, 3)
+
+    -- 3. STASIS PROTOCOL
+    makeToggle(scroll, "[3] STASIS PROTOCOL", "Anchor yourself, become completely unmovable", function(on)
+        S.FreezeSelf = on
+        local char = getChar()
+        local hrp  = getHRP(char)
+        if hrp then hrp.Anchored = on end
+    end, 4)
+
+    -- 4. VOID RESISTANCE
+    makeToggle(scroll, "[4] VOID RESISTANCE", "Auto-teleport back when falling into the void", function(on)
+        S.AntiVoid = on
+    end, 5)
+
+    -- 5. ROTATIONAL DECAY
+    makeToggle(scroll, "[5] ROTATIONAL DECAY", "Spin continuously on the Y-axis", function(on)
+        S.Spin = on
+    end, 6)
+
+    -- 6. PALE CALAMITY
+    makeToggle(scroll, "[6] PALE CALAMITY", "Engulf the world in thick pale fog", function(on)
+        Lighting.FogEnd   = on and 60     or 100000
+        Lighting.FogStart = on and 0      or 0
+        Lighting.FogColor = on
+            and Color3.fromRGB(210, 210, 215)
+            or  Color3.fromRGB(192, 217, 228)
+    end, 7)
+
+    -- 7. SCALE DISTORTION
+    makeSectionLabel(scroll, "SCALE AND SPACE", 8)
+
+    local sizeCard = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 68),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = 9,
+    }, scroll)
+    Corner(6, sizeCard)
+    Stroke(C.Border, 0.5, sizeCard)
+
+    local sizeLbl = New("TextLabel", {
+        Text                   = "[7] SCALE DISTORTION  --  Size: 1.0x",
+        Size                   = UDim2.new(1, -10, 0, 22),
+        Position               = UDim2.new(0, 10, 0, 5),
+        BackgroundTransparency = 1,
+        TextColor3             = C.Text,
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 11,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, sizeCard)
+
+    local function applySize()
+        sizeLbl.Text = string.format("[7] SCALE DISTORTION  --  Size: %.1fx", S.SizeVal)
+        local char = getChar()
+        local hum  = getHum(char)
+        if hum then
+            hum.BodyDepthScale.Value  = S.SizeVal
+            hum.BodyHeightScale.Value = S.SizeVal
+            hum.BodyWidthScale.Value  = S.SizeVal
+            hum.HeadScale.Value       = S.SizeVal
+        end
+    end
+
+    -- Shrink button
+    local shrinkBtn = New("TextButton", {
+        Text             = "Shrink",
+        Size             = UDim2.new(0, 78, 0, 26),
+        Position         = UDim2.new(0, 10, 0, 34),
+        BackgroundColor3 = C.Btn,
+        TextColor3       = C.Text,
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 10,
+        BorderSizePixel  = 0,
+    }, sizeCard)
+    Corner(4, shrinkBtn)
+    hoverBtn(shrinkBtn, C.Btn, C.BtnHov)
+    shrinkBtn.MouseButton1Click:Connect(function()
+        S.SizeVal = math.clamp(math.floor((S.SizeVal - 0.5) * 10 + 0.5) / 10, 0.1, 6.0)
+        applySize()
+    end)
+
+    -- Grow button
+    local growBtn = New("TextButton", {
+        Text             = "Grow",
+        Size             = UDim2.new(0, 78, 0, 26),
+        Position         = UDim2.new(0, 93, 0, 34),
+        BackgroundColor3 = C.Btn,
+        TextColor3       = C.Text,
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 10,
+        BorderSizePixel  = 0,
+    }, sizeCard)
+    Corner(4, growBtn)
+    hoverBtn(growBtn, C.Btn, C.BtnHov)
+    growBtn.MouseButton1Click:Connect(function()
+        S.SizeVal = math.clamp(math.floor((S.SizeVal + 0.5) * 10 + 0.5) / 10, 0.1, 6.0)
+        applySize()
+    end)
+
+    -- Reset button
+    local resetSzBtn = New("TextButton", {
+        Text             = "Reset 1x",
+        Size             = UDim2.new(0, 78, 0, 26),
+        Position         = UDim2.new(0, 176, 0, 34),
+        BackgroundColor3 = C.Accent,
+        TextColor3       = C.Text,
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 10,
+        BorderSizePixel  = 0,
+    }, sizeCard)
+    Corner(4, resetSzBtn)
+    hoverBtn(resetSzBtn, C.Accent, C.AccentBrt)
+    resetSzBtn.MouseButton1Click:Connect(function()
+        S.SizeVal = 1
+        applySize()
+    end)
+
+    -- 8. TEMPORAL SHIFT
+    makeSectionLabel(scroll, "ENVIRONMENT CONTROL", 10)
+
+    local timeCard = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 68),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = 11,
+    }, scroll)
+    Corner(6, timeCard)
+    Stroke(C.Border, 0.5, timeCard)
+
+    local timeLbl = New("TextLabel", {
+        Text                   = "[8] TEMPORAL SHIFT  --  Time: 14:00",
+        Size                   = UDim2.new(1, -10, 0, 22),
+        Position               = UDim2.new(0, 10, 0, 5),
+        BackgroundTransparency = 1,
+        TextColor3             = C.Text,
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 11,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, timeCard)
+
+    local function setTime(h)
+        S.TimeHour = h % 24
+        Lighting.TimeOfDay = string.format("%02d:00:00", S.TimeHour)
+        timeLbl.Text = string.format("[8] TEMPORAL SHIFT  --  Time: %02d:00", S.TimeHour)
+    end
+
+    local minusBtn = New("TextButton", {
+        Text="- Hour", Size=UDim2.new(0,74,0,26), Position=UDim2.new(0,10,0,34),
+        BackgroundColor3=C.Btn, TextColor3=C.Text, Font=Enum.Font.Gotham, TextSize=10, BorderSizePixel=0,
+    }, timeCard)
+    Corner(4, minusBtn); hoverBtn(minusBtn, C.Btn, C.BtnHov)
+    minusBtn.MouseButton1Click:Connect(function() setTime(S.TimeHour - 1) end)
+
+    local plusBtn = New("TextButton", {
+        Text="+ Hour", Size=UDim2.new(0,74,0,26), Position=UDim2.new(0,89,0,34),
+        BackgroundColor3=C.Btn, TextColor3=C.Text, Font=Enum.Font.Gotham, TextSize=10, BorderSizePixel=0,
+    }, timeCard)
+    Corner(4, plusBtn); hoverBtn(plusBtn, C.Btn, C.BtnHov)
+    plusBtn.MouseButton1Click:Connect(function() setTime(S.TimeHour + 1) end)
+
+    local midnightBtn = New("TextButton", {
+        Text="Midnight", Size=UDim2.new(0,74,0,26), Position=UDim2.new(0,168,0,34),
+        BackgroundColor3=C.Btn, TextColor3=C.Text, Font=Enum.Font.Gotham, TextSize=10, BorderSizePixel=0,
+    }, timeCard)
+    Corner(4, midnightBtn); hoverBtn(midnightBtn, C.Btn, C.BtnHov)
+    midnightBtn.MouseButton1Click:Connect(function() setTime(0) end)
+
+    local noonBtn = New("TextButton", {
+        Text="Noon", Size=UDim2.new(0,74,0,26), Position=UDim2.new(0,247,0,34),
+        BackgroundColor3=C.Btn, TextColor3=C.Text, Font=Enum.Font.Gotham, TextSize=10, BorderSizePixel=0,
+    }, timeCard)
+    Corner(4, noonBtn); hoverBtn(noonBtn, C.Btn, C.BtnHov)
+    noonBtn.MouseButton1Click:Connect(function() setTime(12) end)
+
+    -- 9. GRAVITY DEFIANCE
+    makeSlider(scroll, "[9] GRAVITY DEFIANCE  Jump Power", 10, 500, 10, 50, function(v)
+        S.JumpPower = v
+        local char = getChar()
+        local hum  = getHum(char)
+        if hum then hum.JumpPower = v end
+    end, 12)
+
+    -- 10. ECHO CHAMBER
+    makeSectionLabel(scroll, "[10] ECHO CHAMBER  Chat Broadcast", 13)
+
+    local _, chatBox = makeInput(scroll, "Message to Broadcast", "Type your message here", 14)
+
+    makeButton(scroll, "Send Chat Message (once)", function()
+        local msg = chatBox.Text
+        if msg == "" then return end
+        pcall(function()
+            game:GetService("ReplicatedStorage")
+                :FindFirstChild("DefaultChatSystemChatEvents")
+                :FindFirstChild("SayMessageRequest")
+                :FireServer(msg, "All")
+        end)
+    end, 15)
+
+    makeButton(scroll, "Send 5x (1 second apart)", function()
+        local msg = chatBox.Text
+        if msg == "" then return end
+        for i = 1, 5 do
+            task.delay(i - 1, function()
+                pcall(function()
+                    game:GetService("ReplicatedStorage")
+                        :FindFirstChild("DefaultChatSystemChatEvents")
+                        :FindFirstChild("SayMessageRequest")
+                        :FireServer(msg, "All")
+                end)
+            end)
+        end
+    end, 16)
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB 6: ORDEAL  (Custom atmospheric + utility features)
+-- ════════════════════════════════════════════════════════════════
+do
+    local scroll = makeScrollFrame(TabFrames["Ordeal"])
+
+    -- ══════════════════════════════════════════════
+    -- BREACH ALERT SYSTEM
+    -- A full-screen dramatic overlay mimicking a
+    -- Lobotomy Corp containment breach announcement.
+    -- ══════════════════════════════════════════════
+    makeSectionLabel(scroll, "BREACH ALERT SYSTEM", 1)
+
+    -- Build the overlay (hidden by default)
+    local breachOverlay = New("Frame", {
+        Name                   = "BreachOverlay",
+        Size                   = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3       = Color3.fromRGB(0, 0, 0),
+        BackgroundTransparency = 1,
+        ZIndex                 = 100,
+        Visible                = false,
+    }, ScreenGui)
+
+    local breachVignette = New("ImageLabel", {
+        Size                   = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Image                  = "rbxassetid://1393519701", -- radial gradient
+        ImageColor3            = Color3.fromRGB(180, 0, 0),
+        ImageTransparency      = 0.3,
+        ZIndex                 = 101,
+    }, breachOverlay)
+
+    local breachTitle = New("TextLabel", {
+        Text                   = "-- CONTAINMENT BREACH --",
+        Size                   = UDim2.new(1, 0, 0, 50),
+        Position               = UDim2.new(0, 0, 0.35, 0),
+        BackgroundTransparency = 1,
+        TextColor3             = Color3.fromRGB(255, 60, 60),
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 32,
+        TextXAlignment         = Enum.TextXAlignment.Center,
+        ZIndex                 = 102,
+    }, breachOverlay)
+
+    local breachSub = New("TextLabel", {
+        Text                   = "NOTHING THERE HAS ESCAPED CONTAINMENT",
+        Size                   = UDim2.new(1, 0, 0, 30),
+        Position               = UDim2.new(0, 0, 0.35, 56),
+        BackgroundTransparency = 1,
+        TextColor3             = Color3.fromRGB(220, 200, 200),
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 14,
+        TextXAlignment         = Enum.TextXAlignment.Center,
+        ZIndex                 = 102,
+    }, breachOverlay)
+
+    local breachCode = New("TextLabel", {
+        Text                   = "QLIPHOTH COUNTER: 0   |   ALL EMPLOYEES: EVACUATION PROTOCOL DELTA",
+        Size                   = UDim2.new(1, 0, 0, 20),
+        Position               = UDim2.new(0, 0, 0.35, 92),
+        BackgroundTransparency = 1,
+        TextColor3             = Color3.fromRGB(160, 100, 100),
+        Font                   = Enum.Font.Code,
+        TextSize               = 10,
+        TextXAlignment         = Enum.TextXAlignment.Center,
+        ZIndex                 = 102,
+    }, breachOverlay)
+
+    local breachBar = New("Frame", {
+        Size             = UDim2.new(0, 0, 0, 3),
+        Position         = UDim2.new(0, 0, 0.5, 130),
+        BackgroundColor3 = Color3.fromRGB(200, 0, 0),
+        ZIndex           = 102,
+    }, breachOverlay)
+
+    local breachActive = false
+
+    local function triggerBreach(customMsg)
+        if breachActive then return end
+        breachActive = true
+        breachSub.Text = customMsg or "NOTHING THERE HAS ESCAPED CONTAINMENT"
+        breachOverlay.Visible = true
+
+        -- Fade overlay in
+        TweenService:Create(breachOverlay, TweenInfo.new(0.3), {BackgroundTransparency = 0.55}):Play()
+        -- Animate red bar sweep
+        breachBar.Size = UDim2.new(0, 0, 0, 3)
+        TweenService:Create(breachBar, TweenInfo.new(1.5, Enum.EasingStyle.Sine), {Size = UDim2.new(1, 0, 0, 3)}):Play()
+        -- Pulse title
+        local pulse = TweenService:Create(breachTitle,
+            TweenInfo.new(0.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, 6, true),
+            {TextTransparency = 0.6}
+        )
+        pulse:Play()
+        -- Auto-dismiss after 5 seconds
+        task.delay(5, function()
+            TweenService:Create(breachOverlay, TweenInfo.new(0.8), {BackgroundTransparency = 1}):Play()
+            task.wait(0.85)
+            breachOverlay.Visible = false
+            breachActive = false
+        end)
+    end
+
+    -- Custom message input for breach
+    local _, breachMsgBox = makeInput(scroll, "Breach Message (optional)", "Leave blank for default…", 2)
+
+    makeButton(scroll, "TRIGGER BREACH ALERT", function()
+        local msg = breachMsgBox.Text
+        triggerBreach(msg ~= "" and msg:upper() or nil)
+    end, 3)
+
+    makeButton(scroll, "Dismiss Alert Early", function()
+        if breachOverlay.Visible then
+            TweenService:Create(breachOverlay, TweenInfo.new(0.4), {BackgroundTransparency = 1}):Play()
+            task.delay(0.45, function()
+                breachOverlay.Visible = false
+                breachActive = false
+            end)
+        end
+    end, 4)
+
+    -- ══════════════════════════════════════════════
+    -- PALE CLOCK HUD
+    -- A small persistent screen clock styled like
+    -- a Lobotomy Corp facility readout.
+    -- ══════════════════════════════════════════════
+    makeSectionLabel(scroll, "PALE CLOCK HUD", 5)
+
+    local clockHUD = New("Frame", {
+        Name             = "PaleClockHUD",
+        Size             = UDim2.new(0, 200, 0, 52),
+        Position         = UDim2.new(1, -210, 0, 10),
+        BackgroundColor3 = Color3.fromRGB(10, 5, 5),
+        BackgroundTransparency = 0.2,
+        ZIndex           = 50,
+        Visible          = false,
+    }, ScreenGui)
+    Corner(6, clockHUD)
+    Stroke(C.Accent, 1, clockHUD)
+
+    New("TextLabel", {
+        Text                   = "FACILITY TIME",
+        Size                   = UDim2.new(1, 0, 0, 16),
+        Position               = UDim2.new(0, 0, 0, 4),
+        BackgroundTransparency = 1,
+        TextColor3             = Color3.fromRGB(120, 50, 50),
+        Font                   = Enum.Font.Code,
+        TextSize               = 9,
+        TextXAlignment         = Enum.TextXAlignment.Center,
+        ZIndex                 = 51,
+    }, clockHUD)
+
+    local clockTime = New("TextLabel", {
+        Text                   = "00:00:00",
+        Size                   = UDim2.new(1, 0, 0, 28),
+        Position               = UDim2.new(0, 0, 0, 18),
+        BackgroundTransparency = 1,
+        TextColor3             = C.AccentBrt,
+        Font                   = Enum.Font.Code,
+        TextSize               = 22,
+        TextXAlignment         = Enum.TextXAlignment.Center,
+        ZIndex                 = 51,
+    }, clockHUD)
+
+    local clockConn = nil
+
+    makeToggle(scroll, "Show Pale Clock HUD", "Real-time clock in facility readout style", function(on)
+        clockHUD.Visible = on
+        if on then
+            clockConn = RunService.Heartbeat:Connect(function()
+                local t = os.date("*t")
+                clockTime.Text = string.format("%02d:%02d:%02d", t.hour, t.min, t.sec)
+            end)
+        else
+            if clockConn then clockConn:Disconnect(); clockConn = nil end
+        end
+    end, 6)
+
+    -- ══════════════════════════════════════════════
+    -- MANAGER'S LOG (in-session notepad)
+    -- A draggable sticky-note style notepad that
+    -- persists through the session.
+    -- ══════════════════════════════════════════════
+    makeSectionLabel(scroll, "MANAGER'S LOG", 7)
+
+    -- The floating notepad window
+    local notepadGui = New("ScreenGui", {
+        Name           = "NotepadGui",
+        ResetOnSpawn   = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Enabled        = false,
+    }, PlayerGui)
+
+    local notepadFrame = New("Frame", {
+        Size             = UDim2.new(0, 240, 0, 260),
+        Position         = UDim2.new(0.05, 0, 0.2, 0),
+        BackgroundColor3 = Color3.fromRGB(12, 6, 6),
+        BorderSizePixel  = 0,
+        Active           = true,
+    }, notepadGui)
+    Corner(6, notepadFrame)
+    Stroke(C.Accent, 1.2, notepadFrame)
+
+    local notepadTitleBar = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 28),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+    }, notepadFrame)
+    Corner(6, notepadTitleBar)
+
+    New("TextLabel", {
+        Text                   = "MANAGER'S LOG  //  CONFIDENTIAL",
+        Size                   = UDim2.new(1, -34, 1, 0),
+        Position               = UDim2.new(0, 8, 0, 0),
+        BackgroundTransparency = 1,
+        TextColor3             = C.Accent,
+        Font                   = Enum.Font.Code,
+        TextSize               = 9,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, notepadTitleBar)
+
+    local noteClose = New("TextButton", {
+        Text             = "X",
+        Size             = UDim2.new(0, 22, 0, 18),
+        Position         = UDim2.new(1, -26, 0, 5),
+        BackgroundColor3 = C.Accent,
+        TextColor3       = Color3.new(1,1,1),
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 10,
+        BorderSizePixel  = 0,
+    }, notepadTitleBar)
+    Corner(3, noteClose)
+    noteClose.MouseButton1Click:Connect(function()
+        notepadGui.Enabled = false
+    end)
+
+    -- Drag the notepad
+    local nDrag, nDragStart, nStartPos = false, nil, nil
+    notepadTitleBar.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            nDrag = true; nDragStart = inp.Position; nStartPos = notepadFrame.Position
+        end
+    end)
+    notepadTitleBar.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then nDrag = false end
+    end)
+    UserInputService.InputChanged:Connect(function(inp)
+        if nDrag and inp.UserInputType == Enum.UserInputType.MouseMovement then
+            local d = inp.Position - nDragStart
+            notepadFrame.Position = UDim2.new(
+                nStartPos.X.Scale, nStartPos.X.Offset + d.X,
+                nStartPos.Y.Scale, nStartPos.Y.Offset + d.Y
+            )
+        end
+    end)
+
+    -- Decorative lines behind textarea
+    for i = 1, 7 do
+        New("Frame", {
+            Size             = UDim2.new(1, -20, 0, 1),
+            Position         = UDim2.new(0, 10, 0, 28 + i * 28),
+            BackgroundColor3 = Color3.fromRGB(60, 20, 20),
+            BorderSizePixel  = 0,
+        }, notepadFrame)
+    end
+
+    local noteBox = New("TextBox", {
+        Text              = "",
+        PlaceholderText   = "Write your facility notes here…\nThoughts on the Abnormalities.\nRecords. Warnings. Anything.",
+        Size              = UDim2.new(1, -20, 1, -38),
+        Position          = UDim2.new(0, 10, 0, 32),
+        BackgroundTransparency = 1,
+        TextColor3        = Color3.fromRGB(210, 180, 180),
+        PlaceholderColor3 = Color3.fromRGB(90, 60, 60),
+        Font              = Enum.Font.Code,
+        TextSize          = 11,
+        TextXAlignment    = Enum.TextXAlignment.Left,
+        TextYAlignment    = Enum.TextYAlignment.Top,
+        MultiLine         = true,
+        ClearTextOnFocus  = false,
+        BorderSizePixel   = 0,
+    }, notepadFrame)
+
+    makeButton(scroll, "Open Manager's Log", function()
+        notepadGui.Enabled = not notepadGui.Enabled
+    end, 8)
+
+    makeButton(scroll, "Clear Log", function()
+        noteBox.Text = ""
+    end, 9)
+
+    -- ══════════════════════════════════════════════
+    -- LIVE EMPLOYEE TRACKER
+    -- Lists all players in the server with their
+    -- current health and distance, LC log style.
+    -- Updates every second while open.
+    -- ══════════════════════════════════════════════
+    makeSectionLabel(scroll, "LIVE EMPLOYEE TRACKER", 10)
+
+    local trackerGui = New("ScreenGui", {
+        Name           = "TrackerGui",
+        ResetOnSpawn   = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Enabled        = false,
+    }, PlayerGui)
+
+    local trackerFrame = New("Frame", {
+        Size             = UDim2.new(0, 250, 0, 320),
+        Position         = UDim2.new(0, 10, 0.5, -160),
+        BackgroundColor3 = Color3.fromRGB(8, 4, 4),
+        BackgroundTransparency = 0.1,
+        BorderSizePixel  = 0,
+        Active           = true,
+    }, trackerGui)
+    Corner(6, trackerFrame)
+    Stroke(C.Accent, 1.2, trackerFrame)
+
+    local trackerTitleBar = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 28),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+    }, trackerFrame)
+    Corner(6, trackerTitleBar)
+
+    New("TextLabel", {
+        Text                   = "EMPLOYEE TRACKER  //  LIVE",
+        Size                   = UDim2.new(1, -34, 1, 0),
+        Position               = UDim2.new(0, 8, 0, 0),
+        BackgroundTransparency = 1,
+        TextColor3             = C.Accent,
+        Font                   = Enum.Font.Code,
+        TextSize               = 9,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, trackerTitleBar)
+
+    local tClose = New("TextButton", {
+        Text="X", Size=UDim2.new(0,22,0,18), Position=UDim2.new(1,-26,0,5),
+        BackgroundColor3=C.Accent, TextColor3=Color3.new(1,1,1),
+        Font=Enum.Font.GothamBold, TextSize=10, BorderSizePixel=0,
+    }, trackerTitleBar)
+    Corner(3, tClose)
+    tClose.MouseButton1Click:Connect(function() trackerGui.Enabled = false end)
+
+    -- Drag tracker
+    local tDrag, tDragStart, tStartPos = false, nil, nil
+    trackerTitleBar.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            tDrag=true; tDragStart=inp.Position; tStartPos=trackerFrame.Position
+        end
+    end)
+    trackerTitleBar.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then tDrag=false end
+    end)
+    UserInputService.InputChanged:Connect(function(inp)
+        if tDrag and inp.UserInputType == Enum.UserInputType.MouseMovement then
+            local d = inp.Position - tDragStart
+            trackerFrame.Position = UDim2.new(
+                tStartPos.X.Scale, tStartPos.X.Offset+d.X,
+                tStartPos.Y.Scale, tStartPos.Y.Offset+d.Y
+            )
+        end
+    end)
+
+    local trackerScroll = New("ScrollingFrame", {
+        Size                  = UDim2.new(1, -8, 1, -32),
+        Position              = UDim2.new(0, 4, 0, 30),
+        BackgroundTransparency = 1,
+        BorderSizePixel        = 0,
+        ScrollBarThickness     = 3,
+        ScrollBarImageColor3   = C.Accent,
+        CanvasSize             = UDim2.new(0,0,0,0),
+        AutomaticCanvasSize    = Enum.AutomaticSize.Y,
+    }, trackerFrame)
+    ListLayout(3, trackerScroll)
+
+    local trackerRows = {} -- playerName -> Frame
+
+    local function updateTracker()
+        if not trackerGui.Enabled then return end
+
+        local myHRP = getHRP(getChar())
+
+        for _, plr in ipairs(Players:GetPlayers()) do
+            local pname = plr.Name
+            if not trackerRows[pname] then
+                local row = New("Frame", {
+                    Name             = pname,
+                    Size             = UDim2.new(1, -6, 0, 44),
+                    BackgroundColor3 = C.Secondary,
+                    BorderSizePixel  = 0,
+                }, trackerScroll)
+                Corner(4, row)
+                Stroke(C.Border, 0.5, row)
+
+                New("TextLabel", {
+                    Name                   = "NameLbl",
+                    Text                   = pname,
+                    Size                   = UDim2.new(1, -10, 0, 18),
+                    Position               = UDim2.new(0, 8, 0, 3),
+                    BackgroundTransparency = 1,
+                    TextColor3             = plr == Player and C.AccentBrt or C.Text,
+                    Font                   = Enum.Font.GothamBold,
+                    TextSize               = 11,
+                    TextXAlignment         = Enum.TextXAlignment.Left,
+                }, row)
+
+                New("TextLabel", {
+                    Name                   = "StatsLbl",
+                    Text                   = "HP: -- / --   |   DIST: --",
+                    Size                   = UDim2.new(1, -10, 0, 16),
+                    Position               = UDim2.new(0, 8, 0, 22),
+                    BackgroundTransparency = 1,
+                    TextColor3             = C.TextDim,
+                    Font                   = Enum.Font.Code,
+                    TextSize               = 9,
+                    TextXAlignment         = Enum.TextXAlignment.Left,
+                }, row)
+
+                trackerRows[pname] = row
+            end
+
+            -- Update stats
+            local row = trackerRows[pname]
+            if row and row.Parent then
+                local statsLbl = row:FindFirstChild("StatsLbl")
+                if statsLbl then
+                    local pChar = plr.Character
+                    local pHum  = getHum(pChar)
+                    local pHRP  = getHRP(pChar)
+                    local hp    = pHum and math.floor(pHum.Health)    or 0
+                    local maxHp = pHum and math.floor(pHum.MaxHealth) or 0
+                    local dist  = "??"
+                    if pHRP and myHRP then
+                        dist = tostring(math.floor((pHRP.Position - myHRP.Position).Magnitude))
+                    end
+                    local status = hp <= 0 and "DEAD" or (hp < maxHp * 0.3 and "CRITICAL" or "STABLE")
+                    statsLbl.Text      = string.format("HP: %d/%d  DIST: %su  [%s]", hp, maxHp, dist, status)
+                    statsLbl.TextColor3 = hp <= 0
+                        and Color3.fromRGB(255, 50, 50)
+                        or  (hp < maxHp * 0.3 and Color3.fromRGB(230, 160, 0) or C.TextDim)
+                end
+            end
+        end
+
+        -- Remove rows for players who left
+        for pname, row in pairs(trackerRows) do
+            if not Players:FindFirstChild(pname) then
+                row:Destroy()
+                trackerRows[pname] = nil
+            end
+        end
+    end
+
+    -- Update loop
+    local trackerConn = nil
+    makeToggle(scroll, "Show Employee Tracker", "Live player health + distance readout", function(on)
+        trackerGui.Enabled = on
+        if on then
+            trackerConn = RunService.Heartbeat:Connect(function()
+                -- throttle to ~1 update per second
+            end)
+            -- Use a separate timer approach
+            task.spawn(function()
+                while trackerGui.Enabled do
+                    updateTracker()
+                    task.wait(1)
+                end
+            end)
+        else
+            if trackerConn then trackerConn:Disconnect(); trackerConn = nil end
+        end
+    end, 11)
+
+    -- Players leaving cleans up their row
+    Players.PlayerRemoving:Connect(function(plr)
+        local row = trackerRows[plr.Name]
+        if row then row:Destroy(); trackerRows[plr.Name] = nil end
+    end)
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB 7: TLB  (The Longest Battle — game-specific tools)
+-- ════════════════════════════════════════════════════════════════
+do
+    local RepStorage = game:GetService("ReplicatedStorage")
+    local scroll = makeScrollFrame(TabFrames["TLB"])
+
+    -- ─── shared state ──────────────────────────────────────────
+    local TLB = {
+        dmgMax             = 1500,
+        dmgMin             = 1500,
+        attackSpeedValue   = 5,
+        infiniteSpeed      = false,
+        hitboxSize         = 10,
+        selectedWork       = "Instinct",
+        selectedAbnos      = {},
+    }
+    local workOptions = { "Instinct", "Insight", "Attachment", "Repression" }
+
+    -- ─── helpers ───────────────────────────────────────────────
+    local function tlbSetAttackSpeed(val)
+        local units = workspace:FindFirstChild("Units")
+        local unit  = units and units:FindFirstChild(Player.Name)
+        local stats = unit and unit:FindFirstChild("CharStats")
+        local atk   = stats and stats:FindFirstChild("AttackSpeed")
+        if atk then atk.Value = val end
+    end
+
+    local function tlbApplyDamage(tool)
+        local sv = tool:FindFirstChild("SettingValues")
+        if sv then
+            local mx = sv:FindFirstChild("MaxDamageValue")
+            local mn = sv:FindFirstChild("MinDamageValue")
+            if mx then mx.Value = TLB.dmgMax end
+            if mn then mn.Value = TLB.dmgMin end
+        end
+    end
+
+    local function tlbApplyAllDamage()
+        for _, container in ipairs({ Player.Backpack, Player.Character }) do
+            if container then
+                for _, tool in ipairs(container:GetChildren()) do
+                    if tool:IsA("Tool") then tlbApplyDamage(tool) end
+                end
+            end
+        end
+    end
+
+    local function tlbApplyHitbox(tool)
+        if not tool:IsA("Tool") then return end
+        local anims = tool:FindFirstChild("Animations")
+        local aa    = anims and anims:FindFirstChild("AttackAnimations")
+        if not aa then return end
+        for _, af in ipairs(aa:GetChildren()) do
+            local hbv = af:FindFirstChild("HitboxSize")
+            if hbv and hbv:IsA("Vector3Value") then
+                hbv.Value = Vector3.new(TLB.hitboxSize, TLB.hitboxSize, TLB.hitboxSize)
+            end
+        end
+    end
+
+    local function tlbApplyAllHitboxes()
+        for _, container in ipairs({ Player.Backpack, Player.Character }) do
+            if container then
+                for _, tool in ipairs(container:GetChildren()) do
+                    tlbApplyHitbox(tool)
+                end
+            end
+        end
+    end
+
+    local function tlbDoWork()
+        local abnoRoot = workspace:FindFirstChild("Abnormalities")
+        local assets   = RepStorage:FindFirstChild("Assets")
+        local remotes  = assets and assets:FindFirstChild("RemoteEvents")
+        local remote   = remotes and remotes:FindFirstChild("WorkEvent")
+        if not abnoRoot or not remote then
+            warn("[TLB] WorkEvent or Abnormalities folder not found")
+            return
+        end
+        for _, name in ipairs(TLB.selectedAbnos) do
+            local abno   = abnoRoot:FindFirstChild(name)
+            local tablet = abno and abno:FindFirstChild("WorkTablet")
+            if tablet then
+                remote:FireServer(tablet, TLB.selectedWork)
+            end
+        end
+    end
+
+    -- ─── SECTION: Combat ───────────────────────────────────────
+    makeSectionLabel(scroll, "COMBAT TWEAKS", 1)
+
+    -- Damage inputs live in a sub-card
+    local dmgCard = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 130),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = 2,
+    }, scroll)
+    Corner(6, dmgCard)
+    Stroke(C.Border, 0.5, dmgCard)
+
+    local function tlbInputRow(parent, label, yPos, default, callback)
+        New("TextLabel", {
+            Text                   = label,
+            Size                   = UDim2.new(0, 110, 0, 22),
+            Position               = UDim2.new(0, 10, 0, yPos),
+            BackgroundTransparency = 1,
+            TextColor3             = C.TextDim,
+            Font                   = Enum.Font.Gotham,
+            TextSize               = 11,
+            TextXAlignment         = Enum.TextXAlignment.Left,
+        }, parent)
+        local box = New("TextBox", {
+            Text              = tostring(default),
+            PlaceholderText   = label,
+            Size              = UDim2.new(0, 110, 0, 22),
+            Position          = UDim2.new(0, 120, 0, yPos),
+            BackgroundColor3  = C.InputBG,
+            TextColor3        = C.Text,
+            PlaceholderColor3 = C.TextDim,
+            Font              = Enum.Font.Gotham,
+            TextSize          = 11,
+            BorderSizePixel   = 0,
+            ClearTextOnFocus  = false,
+        }, parent)
+        Corner(4, box)
+        Stroke(C.Border, 0.5, box)
+        box.FocusLost:Connect(function()
+            local v = tonumber(box.Text)
+            if v then callback(v) end
+        end)
+        return box
+    end
+
+    tlbInputRow(dmgCard, "Max Damage",    8,  TLB.dmgMax,   function(v) TLB.dmgMax = v; tlbApplyAllDamage() end)
+    tlbInputRow(dmgCard, "Min Damage",    38, TLB.dmgMin,   function(v) TLB.dmgMin = v; tlbApplyAllDamage() end)
+    tlbInputRow(dmgCard, "Attack Speed",  68, TLB.attackSpeedValue, function(v)
+        TLB.attackSpeedValue = v
+        if not TLB.infiniteSpeed then tlbSetAttackSpeed(v) end
+    end)
+
+    -- Infinite speed toggle inside the card
+    local infBtn = New("TextButton", {
+        Text             = "Infinite Speed: OFF",
+        Size             = UDim2.new(1, -20, 0, 26),
+        Position         = UDim2.new(0, 10, 0, 96),
+        BackgroundColor3 = Color3.fromRGB(50, 50, 50),
+        TextColor3       = C.TextDim,
+        Font             = Enum.Font.GothamBold,
+        TextSize         = 11,
+        BorderSizePixel  = 0,
+    }, dmgCard)
+    Corner(4, infBtn)
+    infBtn.MouseButton1Click:Connect(function()
+        TLB.infiniteSpeed = not TLB.infiniteSpeed
+        tlbSetAttackSpeed(TLB.infiniteSpeed and math.huge or TLB.attackSpeedValue)
+        infBtn.Text             = "Infinite Speed: " .. (TLB.infiniteSpeed and "ON" or "OFF")
+        infBtn.BackgroundColor3 = TLB.infiniteSpeed and C.Accent or Color3.fromRGB(50, 50, 50)
+        infBtn.TextColor3       = TLB.infiniteSpeed and Color3.fromRGB(255, 200, 200) or C.TextDim
+    end)
+
+    makeButton(scroll, "Apply Damage to All Tools", tlbApplyAllDamage, 3)
+
+    -- ─── SECTION: Hitbox ───────────────────────────────────────
+    makeSectionLabel(scroll, "HITBOX TWEAKS", 4)
+
+    local hbCard = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 60),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = 5,
+    }, scroll)
+    Corner(6, hbCard)
+    Stroke(C.Border, 0.5, hbCard)
+
+    tlbInputRow(hbCard, "Hitbox Size", 8, TLB.hitboxSize, function(v)
+        if v > 0 then TLB.hitboxSize = v end
+    end)
+
+    makeButton(scroll, "Apply Hitbox to All Tools", tlbApplyAllHitboxes, 6)
+
+    -- ─── SECTION: Abnormality Worker ───────────────────────────
+    makeSectionLabel(scroll, "ABNORMALITY WORKER", 7)
+
+    -- Work type selector
+    local workCard = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 36),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = 8,
+    }, scroll)
+    Corner(6, workCard)
+    Stroke(C.Border, 0.5, workCard)
+
+    New("TextLabel", {
+        Text                   = "Work Type:",
+        Size                   = UDim2.new(0, 90, 1, 0),
+        Position               = UDim2.new(0, 10, 0, 0),
+        BackgroundTransparency = 1,
+        TextColor3             = C.TextDim,
+        Font                   = Enum.Font.Gotham,
+        TextSize               = 11,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, workCard)
+
+    -- Four work-type toggle buttons side by side
+    local workBtns = {}
+    local bW = (1 / #workOptions)
+    for i, opt in ipairs(workOptions) do
+        local wb = New("TextButton", {
+            Text             = opt,
+            Size             = UDim2.new(bW, -4, 0, 22),
+            Position         = UDim2.new((i-1)*bW, (i==1 and 100 or 2), 0, 7),
+            BackgroundColor3 = opt == TLB.selectedWork and C.Accent or C.Btn,
+            TextColor3       = opt == TLB.selectedWork and Color3.fromRGB(255,200,200) or C.TextDim,
+            Font             = Enum.Font.GothamBold,
+            TextSize         = 9,
+            BorderSizePixel  = 0,
+        }, workCard)
+        Corner(4, wb)
+        workBtns[opt] = wb
+
+        local o = opt
+        wb.MouseButton1Click:Connect(function()
+            TLB.selectedWork = o
+            for optName, b in pairs(workBtns) do
+                b.BackgroundColor3 = optName == o and C.Accent or C.Btn
+                b.TextColor3       = optName == o and Color3.fromRGB(255,200,200) or C.TextDim
+            end
+        end)
+    end
+
+    -- Abno list (scrollable)
+    local abnoListCard = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 160),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = 9,
+    }, scroll)
+    Corner(6, abnoListCard)
+    Stroke(C.Border, 0.5, abnoListCard)
+
+    New("TextLabel", {
+        Text                   = "Select Abnormalities:",
+        Size                   = UDim2.new(1, -10, 0, 18),
+        Position               = UDim2.new(0, 8, 0, 4),
+        BackgroundTransparency = 1,
+        TextColor3             = C.TextDim,
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 10,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, abnoListCard)
+
+    local abnoScroll = New("ScrollingFrame", {
+        Size                   = UDim2.new(1, -10, 1, -24),
+        Position               = UDim2.new(0, 5, 0, 22),
+        BackgroundTransparency = 1,
+        BorderSizePixel        = 0,
+        ScrollBarThickness     = 3,
+        ScrollBarImageColor3   = C.Accent,
+        CanvasSize             = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize    = Enum.AutomaticSize.Y,
+    }, abnoListCard)
+    ListLayout(3, abnoScroll)
+
+    local abnosFolder = workspace:FindFirstChild("Abnormalities")
+    if abnosFolder then
+        for _, abno in ipairs(abnosFolder:GetChildren()) do
+            local aName = abno.Name
+            local aBtn  = New("TextButton", {
+                Text             = aName,
+                Size             = UDim2.new(1, -6, 0, 22),
+                BackgroundColor3 = C.Btn,
+                TextColor3       = C.TextDim,
+                Font             = Enum.Font.Gotham,
+                TextSize         = 10,
+                BorderSizePixel  = 0,
+            }, abnoScroll)
+            Corner(4, aBtn)
+            aBtn.MouseButton1Click:Connect(function()
+                local idx = table.find(TLB.selectedAbnos, aName)
+                if idx then
+                    table.remove(TLB.selectedAbnos, idx)
+                    aBtn.BackgroundColor3 = C.Btn
+                    aBtn.TextColor3       = C.TextDim
+                else
+                    table.insert(TLB.selectedAbnos, aName)
+                    aBtn.BackgroundColor3 = C.Accent
+                    aBtn.TextColor3       = Color3.fromRGB(255, 200, 200)
+                end
+            end)
+        end
+    else
+        New("TextLabel", {
+            Text                   = "No Abnormalities folder found in Workspace.",
+            Size                   = UDim2.new(1, -10, 0, 40),
+            BackgroundTransparency = 1,
+            TextColor3             = C.TextDim,
+            Font                   = Enum.Font.Gotham,
+            TextSize               = 10,
+            TextXAlignment         = Enum.TextXAlignment.Center,
+        }, abnoScroll)
+    end
+
+    makeButton(scroll, "Work Selected Abnormalities", tlbDoWork, 10)
+
+    -- ─── AUTO-WORK LOOP ────────────────────────────────────────
+    -- Repeatedly fires tlbDoWork on a configurable interval.
+    -- Shows a live countdown so you know exactly when the next
+    -- work cycle fires.
+    -- ──────────────────────────────────────────────────────────
+    makeSectionLabel(scroll, "AUTO-WORK LOOP", 11)
+
+    local autoWorkInterval = 5   -- seconds between each cycle
+    local autoWorkRunning  = false
+    local autoWorkThread   = nil
+
+    -- Interval slider
+    makeSlider(scroll, "Work Interval (seconds)", 1, 60, 1, 5, function(v)
+        autoWorkInterval = v
+    end, 12)
+
+    -- Status label that shows countdown
+    local autoStatusCard = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 36),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = 13,
+    }, scroll)
+    Corner(6, autoStatusCard)
+    Stroke(C.Border, 0.5, autoStatusCard)
+
+    local autoStatusLbl = New("TextLabel", {
+        Text                   = "Status: IDLE",
+        Size                   = UDim2.new(1, -10, 1, 0),
+        Position               = UDim2.new(0, 10, 0, 0),
+        BackgroundTransparency = 1,
+        TextColor3             = C.TextDim,
+        Font                   = Enum.Font.Code,
+        TextSize               = 11,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, autoStatusCard)
+
+    -- Cycle counter
+    local cycleCount = 0
+
+    local autoToggleCard, autoToggleBtn = makeToggle(scroll, "Auto-Work Loop", "Auto-fires work on all selected abnormalities", function(on)
+        autoWorkRunning = on
+        cycleCount = 0
+
+        if on then
+            if #TLB.selectedAbnos == 0 then
+                autoStatusLbl.Text      = "Status: No abnormalities selected!"
+                autoStatusLbl.TextColor3 = Color3.fromRGB(230, 160, 0)
+                autoWorkRunning = false
+                -- Force toggle back off visually on next frame
+                task.defer(function()
+                    autoToggleBtn.Text             = "OFF"
+                    autoToggleBtn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+                    autoToggleBtn.TextColor3       = C.TextDim
+                    autoWorkRunning = false
+                end)
+                return
+            end
+
+            autoStatusLbl.TextColor3 = C.AccentBrt
+            autoWorkThread = task.spawn(function()
+                while autoWorkRunning do
+                    -- Countdown display
+                    local remaining = autoWorkInterval
+                    while remaining > 0 and autoWorkRunning do
+                        autoStatusLbl.Text = string.format(
+                            "Status: RUNNING  |  Next: %ds  |  Cycles: %d",
+                            remaining, cycleCount
+                        )
+                        task.wait(1)
+                        remaining -= 1
+                    end
+                    if not autoWorkRunning then break end
+                    -- Fire work
+                    tlbDoWork()
+                    cycleCount += 1
+                    autoStatusLbl.Text = string.format(
+                        "Status: FIRED  |  Cycle #%d complete",
+                        cycleCount
+                    )
+                    task.wait(0.1)
+                end
+                autoStatusLbl.Text       = string.format("Status: STOPPED  |  Total cycles: %d", cycleCount)
+                autoStatusLbl.TextColor3 = C.TextDim
+            end)
+        else
+            autoWorkRunning = false
+        end
+    end, 14)
+
+
+    if Player.Character then
+        Player.Character.ChildAdded:Connect(function(c)
+            if c:IsA("Tool") then
+                task.wait(0.1)
+                tlbApplyDamage(c)
+                tlbApplyHitbox(c)
+            end
+        end)
+    end
+    Player.CharacterAdded:Connect(function(char)
+        char.ChildAdded:Connect(function(c)
+            if c:IsA("Tool") then
+                task.wait(0.1)
+                tlbApplyDamage(c)
+                tlbApplyHitbox(c)
+            end
+        end)
+    end)
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB 7: SETTINGS
+-- ════════════════════════════════════════════════════════════════
+do
+    local scroll = makeScrollFrame(TabFrames["Settings"])
+
+    makeSectionLabel(scroll, "GUI BEHAVIOUR", 1)
+
+    makeToggle(scroll, "Always On Top", "Render GUI above every other ScreenGui", function(on)
+        ScreenGui.DisplayOrder = on and 999 or 1
+    end, 2)
+
+    makeToggle(scroll, "RightShift Keybind", "Press Right Shift to toggle GUI visibility", function(on)
+        S.KeybindEnabled = on
+    end, 3)
+
+    makeToggle(scroll, "Lock Drag Position", "Disable dragging the GUI window", function(on)
+        S.DragLocked = on
+    end, 4)
+
+    makeSectionLabel(scroll, "MOVEMENT VALUES", 5)
+
+    makeSlider(scroll, "Walk Speed (Speed Boost)", 16, 500, 4, 50, function(v)
+        S.SpeedValue = v
+        if S.SpeedOn then
+            local char = getChar()
+            local hum  = getHum(char)
+            if hum then hum.WalkSpeed = v end
+        end
+    end, 6)
+
+    makeSlider(scroll, "Fly Speed", 10, 200, 5, 50, function(v)
+        S.FlySpeed = v
+    end, 7)
+
+    makeSectionLabel(scroll, "VISUAL OPTIONS", 8)
+
+    makeToggle(scroll, "Minimal Title Bar", "Hide the Aleph Class subtitle text", function(on)
+        TitleLabel.Text = on
+            and "N O T H I N G   T H E R E"
+            or  "◈  N O T H I N G   T H E R E  ◈   |   Aleph Class"
+    end, 9)
+
+    makeSlider(scroll, "GUI Scale", 50, 150, 10, 100, function(v)
+        local sc = ScreenGui:FindFirstChildOfClass("UIScale")
+        if not sc then sc = New("UIScale", {}, ScreenGui) end
+        sc.Scale = v / 100
+    end, 10)
+
+    makeSectionLabel(scroll, "INFORMATION", 11)
+
+    local infoCard = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 90),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = 12,
+    }, scroll)
+    Corner(6, infoCard)
+    Stroke(C.Accent, 0.5, infoCard)
+
+    local infoLines = {
+        "Nothing There GUI -- Lobotomy Corporation Theme",
+        "Player: " .. Player.Name .. "  |  ID: " .. Player.UserId,
+        "Place: " .. game.Name,
+        "",
+        '"It was never there.  It was never there."',
+    }
+
+    New("TextLabel", {
+        Text                   = table.concat(infoLines, "\n"),
+        Size                   = UDim2.new(1, -20, 1, -10),
+        Position               = UDim2.new(0, 10, 0, 5),
+        BackgroundTransparency = 1,
+        TextColor3             = C.TextDim,
+        Font                   = Enum.Font.Code,
+        TextSize               = 10,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+        TextYAlignment         = Enum.TextYAlignment.Center,
+    }, infoCard)
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- RUNTIME HEARTBEAT LOOP
+-- ════════════════════════════════════════════════════════════════
+RunService.Heartbeat:Connect(function()
+    local char = getChar()
+    if not char then return end
+    local hum = getHum(char)
+    local hrp = getHRP(char)
+
+    -- FLY
+    if S.Fly then
+        if hrp and not S.FlyBV then
+            S.FlyBV = New("BodyVelocity", {
+                Velocity = Vector3.zero,
+                MaxForce = Vector3.new(1e5, 1e5, 1e5),
+            }, hrp)
+            S.FlyBG = New("BodyGyro", {
+                MaxTorque = Vector3.new(1e5, 1e5, 1e5),
+                D         = 100,
+            }, hrp)
+        end
+        if S.FlyBV and hrp then
+            local cam = workspace.CurrentCamera
+            local sp  = S.FlySpeed
+            local v   = Vector3.zero
+            if UserInputService:IsKeyDown(Enum.KeyCode.W)           then v = v + cam.CFrame.LookVector  * sp end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S)           then v = v - cam.CFrame.LookVector  * sp end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A)           then v = v - cam.CFrame.RightVector * sp end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D)           then v = v + cam.CFrame.RightVector * sp end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space)       then v = v + Vector3.new(0, sp, 0)       end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then v = v - Vector3.new(0, sp, 0)       end
+            S.FlyBV.Velocity = v
+            S.FlyBG.CFrame   = cam.CFrame
+            if hum then hum.PlatformStand = true end
+        end
+    end
+
+    -- NO CLIP
+    if S.NoClip then
+        if hum then hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false) end
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then p.CanCollide = false end
+        end
+    end
+
+    -- RAINBOW
+    if S.Rainbow then
+        local t  = tick()
+        local rc = Color3.new(
+            math.sin(t)       * 0.5 + 0.5,
+            math.sin(t + 2.1) * 0.5 + 0.5,
+            math.sin(t + 4.2) * 0.5 + 0.5
+        )
+        for _, p in ipairs(char:GetDescendants()) do
+            if p:IsA("BasePart") then p.Color = rc end
+        end
+    end
+
+    -- SPIN
+    if S.Spin and hrp then
+        hrp.CFrame = hrp.CFrame * CFrame.Angles(0, math.rad(4), 0)
+    end
+
+    -- ANTI-VOID
+    if S.AntiVoid and hrp and hrp.Position.Y < -80 then
+        hrp.CFrame = CFrame.new(hrp.Position.X, 60, hrp.Position.Z)
+    end
+
+    -- ESP (refreshed each frame so boxes auto-expire via Debris)
+    if S.ESP then
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= Player and plr.Character then
+                local plrChar = plr.Character
+                local root = plrChar:FindFirstChild("HumanoidRootPart")
+                if root and not root:FindFirstChild("ESP_Box") then
+                    local sb = New("SelectionBox", {
+                        Name               = "ESP_Box",
+                        Adornee            = plrChar,
+                        Color3             = C.AccentBrt,
+                        LineThickness      = 0.05,
+                        SurfaceTransparency = 0.88,
+                        SurfaceColor3      = C.Accent,
+                    }, workspace)
+                    Debris:AddItem(sb, 0.2)
+                end
+            end
+        end
+    end
+end)
+
+-- ════════════════════════════════════════════════════════════════
+-- INFINITE JUMP
+-- ════════════════════════════════════════════════════════════════
+UserInputService.JumpRequest:Connect(function()
+    if S.InfiniteJump then
+        local char = getChar()
+        local hum  = getHum(char)
+        if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+
+-- ════════════════════════════════════════════════════════════════
+-- KEYBIND
+-- ════════════════════════════════════════════════════════════════
+UserInputService.InputBegan:Connect(function(inp, gp)
+    if gp then return end
+    if S.KeybindEnabled and inp.KeyCode == Enum.KeyCode.RightShift then
+        MainFrame.Visible = not MainFrame.Visible
+    end
+end)
+
+-- ════════════════════════════════════════════════════════════════
+-- CHARACTER RESPAWN: reapply persistent features
+-- ════════════════════════════════════════════════════════════════
+Player.CharacterAdded:Connect(function(newChar)
+    task.wait(0.5)
+    local hum = getHum(newChar)
+    local hrp = getHRP(newChar)
+    if hum then
+        if S.SpeedOn   then hum.WalkSpeed = S.SpeedValue end
+        hum.JumpPower  = S.JumpPower
+    end
+    if hrp and S.FreezeSelf then hrp.Anchored = true end
+    S.FlyBV = nil
+    S.FlyBG = nil
+end)
+
+-- ════════════════════════════════════════════════════════════════
+-- TITLE BAR PULSE
+-- ════════════════════════════════════════════════════════════════
+TweenService:Create(
+    TitleLabel,
+    TweenInfo.new(2.5, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+    { TextTransparency = 0.45 }
+):Play()
+
+-- ════════════════════════════════════════════════════════════════
+-- START ON HOME
+-- ════════════════════════════════════════════════════════════════
+showTab("Home")
+print("Nothing There GUI loaded. Enable RightShift keybind in Settings tab.")
