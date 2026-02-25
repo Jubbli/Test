@@ -70,6 +70,8 @@ local S = {
     CustomB        = 5,
     SizeVal        = 1,
     TimeHour       = 14,
+    GodMode        = false,
+    ClickTp        = false,
 }
 
 -- ════════════════════════════════════════════════════════════════
@@ -111,6 +113,136 @@ end
 local function hoverBtn(btn, normal, hover)
     btn.MouseEnter:Connect(function() btn.BackgroundColor3 = hover end)
     btn.MouseLeave:Connect(function() btn.BackgroundColor3 = normal end)
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- GUI FEATURE: TOAST NOTIFICATION SYSTEM
+-- A small pill-shaped notification slides in from the right edge
+-- of the screen whenever called. Stacks cleanly if multiple fire
+-- in quick succession. Call from anywhere:
+--   showToast("Title", "Body text", Color3)
+-- ════════════════════════════════════════════════════════════════
+local toastQueue    = {}
+local toastRunning  = false
+local TOAST_W       = 240
+local TOAST_H       = 46
+local TOAST_PAD     = 8    -- gap between stacked toasts
+local TOAST_MAX     = 4    -- max visible at once
+
+local toastContainer  -- Frame that holds all active toasts, created lazily
+
+local function ensureToastContainer()
+    if toastContainer and toastContainer.Parent then return end
+    toastContainer = New("Frame", {
+        Name                   = "ToastContainer",
+        Size                   = UDim2.new(0, TOAST_W, 1, 0),
+        Position               = UDim2.new(1, -(TOAST_W + 10), 0, 0),
+        BackgroundTransparency = 1,
+        ZIndex                 = 200,
+    }, ScreenGui)
+    ListLayout(TOAST_PAD, toastContainer)
+    -- Align from bottom
+    local ll = toastContainer:FindFirstChildOfClass("UIListLayout")
+    if ll then
+        ll.VerticalAlignment = Enum.VerticalAlignment.Bottom
+        ll.HorizontalAlignment = Enum.HorizontalAlignment.Right
+    end
+    Pad(0, 0, 0, 10, toastContainer)
+end
+
+local function showToast(title, body, accentColor)
+    ensureToastContainer()
+    accentColor = accentColor or C.Accent
+
+    -- Respect max visible limit
+    local existing = toastContainer:GetChildren()
+    local frameCount = 0
+    for _, c in ipairs(existing) do
+        if c:IsA("Frame") then frameCount += 1 end
+    end
+    if frameCount >= TOAST_MAX then return end
+
+    local toast = New("Frame", {
+        Size                   = UDim2.new(0, TOAST_W, 0, TOAST_H),
+        BackgroundColor3       = Color3.fromRGB(12, 6, 6),
+        BackgroundTransparency = 0.08,
+        BorderSizePixel        = 0,
+        Position               = UDim2.new(0, TOAST_W + 20, 0, 0), -- starts off-screen
+        ClipsDescendants       = false,
+    }, toastContainer)
+    Corner(8, toast)
+    Stroke(accentColor, 1, toast)
+
+    -- Coloured left accent bar
+    local accentBar = New("Frame", {
+        Size             = UDim2.new(0, 3, 1, -8),
+        Position         = UDim2.new(0, 4, 0, 4),
+        BackgroundColor3 = accentColor,
+        BorderSizePixel  = 0,
+    }, toast)
+    Corner(2, accentBar)
+
+    New("TextLabel", {
+        Text                   = title,
+        Size                   = UDim2.new(1, -18, 0, 18),
+        Position               = UDim2.new(0, 14, 0, 5),
+        BackgroundTransparency = 1,
+        TextColor3             = accentColor,
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 11,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, toast)
+
+    New("TextLabel", {
+        Text                   = body,
+        Size                   = UDim2.new(1, -18, 0, 15),
+        Position               = UDim2.new(0, 14, 0, 24),
+        BackgroundTransparency = 1,
+        TextColor3             = C.TextDim,
+        Font                   = Enum.Font.Code,
+        TextSize               = 9,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+    }, toast)
+
+    -- Progress bar that drains as toast expires
+    local progressBg = New("Frame", {
+        Size             = UDim2.new(1, -8, 0, 2),
+        Position         = UDim2.new(0, 4, 1, -4),
+        BackgroundColor3 = Color3.fromRGB(30, 10, 10),
+        BorderSizePixel  = 0,
+    }, toast)
+    Corner(1, progressBg)
+
+    local progressFill = New("Frame", {
+        Size             = UDim2.new(1, 0, 1, 0),
+        BackgroundColor3 = accentColor,
+        BorderSizePixel  = 0,
+    }, progressBg)
+    Corner(1, progressFill)
+
+    -- Slide in from the right
+    toast.Position = UDim2.new(0, TOAST_W + 20, 0, 0)
+    TweenService:Create(toast,
+        TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        {Position = UDim2.new(0, 0, 0, 0)}
+    ):Play()
+
+    -- Drain progress bar and then slide out
+    local duration = 3
+    TweenService:Create(progressFill,
+        TweenInfo.new(duration, Enum.EasingStyle.Linear),
+        {Size = UDim2.new(0, 0, 1, 0)}
+    ):Play()
+
+    task.delay(duration, function()
+        TweenService:Create(toast,
+            TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+            {Position = UDim2.new(0, TOAST_W + 20, 0, 0), BackgroundTransparency = 1}
+        ):Play()
+        task.delay(0.22, function()
+            toast:Destroy()
+        end)
+    end)
 end
 
 local function getChar()
@@ -244,6 +376,7 @@ local TABS = {
     { name = "Abnormality", icon = "@" },
     { name = "Ordeal",      icon = "%" },
     { name = "TLB",         icon = "!" },
+    { name = "FNF",         icon = "#" },
     { name = "Settings",    icon = "=" },
 }
 
@@ -382,6 +515,14 @@ local function makeToggle(parent, title, desc, callback, order)
         tb.BackgroundColor3 = toggled and C.Accent or Color3.fromRGB(50, 50, 50)
         tb.TextColor3       = toggled and Color3.fromRGB(255, 200, 200) or C.TextDim
         callback(toggled)
+        -- Fire a toast notification so every toggle is acknowledged
+        pcall(function()
+            showToast(
+                title .. (toggled and "  ▶  ON" or "  ■  OFF"),
+                toggled and "Feature enabled." or "Feature disabled.",
+                toggled and C.AccentBrt or C.TextDim
+            )
+        end)
     end)
     return card, tb
 end
@@ -828,6 +969,17 @@ do
         task.wait(0.5)  -- brief wait so the player is fully removed first
         buildTpList()
     end)
+
+    -- ─── ADVANCED SCRIPTS ──────────────────────────────────────
+    makeSectionLabel(scroll, "ADVANCED", 17)
+
+    makeToggle(scroll, "God Mode", "Lock health to maximum every single frame", function(on)
+        S.GodMode = on
+    end, 18)
+
+    makeToggle(scroll, "Click Teleport", "Hold LeftAlt + left-click to teleport to cursor", function(on)
+        S.ClickTp = on
+    end, 19)
 end
 
 -- ════════════════════════════════════════════════════════════════
@@ -1825,6 +1977,772 @@ do
 end
 
 -- ════════════════════════════════════════════════════════════════
+-- TAB 8: FNF  (Funky Friday — correct fixed port)
+-- ════════════════════════════════════════════════════════════════
+--  Root bug in all previous versions: the reference script's
+--  background loop does `keymap = Inner` which OVERWRITES the
+--  keymap table with a Roblox Instance. Then keymap[1] through
+--  keymap[9] return nil (numeric indexing on an Instance = nil),
+--  so VIM:SendKeyEvent gets nil and nothing is pressed.
+--
+--  Fix: separate laneKeys[1..9] table for KeyCodes, never
+--  overwritten. Inner frame stored in a dedicated variable.
+--
+--  ALSO fixed: downscroll vs upscroll threshold direction.
+--  Downscroll → notes fall, Y.Scale increases → fire when > 0.4
+--  Upscroll   → notes rise, Y.Scale decreases → fire when < 0.6
+-- ════════════════════════════════════════════════════════════════
+do
+    local VIM        = game:GetService("VirtualInputManager")
+    local RunService = game:GetService("RunService")
+    local scroll     = makeScrollFrame(TabFrames["FNF"])
+
+    -- ── State ─────────────────────────────────────────────────
+    local FNF = {
+        auto          = false,
+        side          = nil,         -- "Left" | "Right"
+        downscroll    = true,        -- true = downscroll (default)
+        delay         = 0,           -- signed delay in seconds
+        delayMode     = "Static",
+        notesHit      = 0,
+        combo         = 0,
+        maxCombo      = 0,
+        keybind       = Enum.KeyCode.Insert,
+        humanizerOn   = false,
+        missRate      = 0.03,
+        jitterMax     = 0.02,
+        laneLastHit   = {0,0,0,0,0,0,0,0,0},
+        laneColors    = {
+            Color3.fromRGB(200,60,60),  Color3.fromRGB(60,180,60),
+            Color3.fromRGB(60,120,220), Color3.fromRGB(220,180,0),
+            Color3.fromRGB(200,60,200), Color3.fromRGB(60,200,200),
+            Color3.fromRGB(220,120,60), Color3.fromRGB(140,200,60),
+            Color3.fromRGB(160,160,255),
+        },
+    }
+
+    -- THE FIX: laneKeys is ONLY ever a table of KeyCodes.
+    -- It is NEVER reassigned to anything else.
+    -- The Inner frame lives in a completely separate variable.
+    local laneKeys = {}
+    for i = 1, 9 do laneKeys[i] = Enum.KeyCode.Unknown end
+
+    -- Forward-declared UI refs
+    local statusLbl, keybindBtn, botToggleBtn, downscrollBtn, upscrollBtn
+
+    -- ── Key refresh ───────────────────────────────────────────
+    -- innerFrame is the path used for reading, laneKeys stores results.
+    -- These two variables are kept completely separate.
+    local function refreshKeys()
+        pcall(function()
+            local innerFrame = Player.PlayerGui.Window.Game.Fields[FNF.side or "Left"].Inner
+            for i = 1, 9 do
+                pcall(function()
+                    local lane  = innerFrame["Lane"..i]
+                    local label = lane.Labels.Label.Text
+                    local kc    = Enum.KeyCode[label.text]
+                    if kc then laneKeys[i] = kc end
+                end)
+            end
+        end)
+    end
+
+    -- ── Side detection ────────────────────────────────────────
+    local function detectSide()
+        pcall(function()
+            local char = Player.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if not root then return end
+            local minL, minR = math.huge, math.huge
+            local stages = workspace:FindFirstChild("Map")
+                and workspace.Map:FindFirstChild("Stages")
+            if not stages then return end
+            for _, stage in pairs(stages:GetChildren()) do
+                pcall(function()
+                    if not stage:FindFirstChild("Teams") then return end
+                    local pL = stage.Teams:FindFirstChild("Left")
+                    local pR = stage.Teams:FindFirstChild("Right")
+                    if pL then
+                        local d = (root.Position - pL.Position).Magnitude
+                        if d <= 5 and d < minL then minL = d end
+                    end
+                    if pR then
+                        local d = (root.Position - pR.Position).Magnitude
+                        if d <= 5 and d < minR then minR = d end
+                    end
+                end)
+            end
+            if     minL < minR then FNF.side = "Left"
+            elseif minR < minL then FNF.side = "Right" end
+        end)
+    end
+
+    -- ── Try to auto-detect scroll direction from game settings ─
+    local function detectScrollDir()
+        pcall(function()
+            -- Funky Friday stores downscroll toggle in settings
+            local paths = {
+                "GameGui/Windows/Configuration/Frame/Body/Content/Settings/Entries/ScrollingFrame/DownScroll/Toggle/Inner",
+                "GameGui/Windows/Settings/Frame/Body/Settings/Settings/ScrollingFrame/DownScroll/Toggle/Outer/Inner",
+            }
+            local pg = Player.PlayerGui
+            for _, p in ipairs(paths) do
+                local node = pg
+                for part in p:gmatch("[^/]+") do
+                    node = node and node:FindFirstChild(part)
+                end
+                if node then
+                    -- Green = enabled
+                    local col = node.BackgroundColor3 or node.ImageColor3
+                    if col then
+                        local r,g,b = col.R*255, col.G*255, col.B*255
+                        FNF.downscroll = (g > 200 and r < 150)
+                        return
+                    end
+                end
+            end
+        end)
+    end
+
+    -- ── Columns setup ─────────────────────────────────────────
+    local function setupColumns()
+        local columns = {}
+        pcall(function()
+            local innerFrame = Player.PlayerGui.Window.Game.Fields[FNF.side or "Left"].Inner
+            for i = 1, 9 do
+                pcall(function()
+                    local lane = innerFrame["Lane"..i]
+                    if lane then
+                        local notes = lane:FindFirstChild("Notes")
+                        if notes then columns[i] = notes end
+                    end
+                end)
+            end
+        end)
+        return columns
+    end
+
+    -- ── VIM send ──────────────────────────────────────────────
+    local function pressLane(i)
+        local kc = laneKeys[i]
+        if not kc or kc == Enum.KeyCode.Unknown then return end
+        if FNF.humanizerOn and math.random() < FNF.missRate then return end
+        local jitter = FNF.humanizerOn and (math.random() * FNF.jitterMax) or 0
+        local function fire()
+            pcall(function() VIM:SendKeyEvent(true, kc, false, game) end)
+            FNF.laneLastHit[i] = tick()
+            FNF.notesHit += 1
+            FNF.combo    += 1
+            if FNF.combo > FNF.maxCombo then FNF.maxCombo = FNF.combo end
+        end
+        if jitter > 0 then task.delay(jitter, fire) else fire() end
+    end
+
+    local function releaseLane(i)
+        local kc = laneKeys[i]
+        if not kc or kc == Enum.KeyCode.Unknown then return end
+        pcall(function() VIM:SendKeyEvent(false, kc, false, game) end)
+        FNF.combo = 0
+    end
+
+    -- ── Main autoplay loop ────────────────────────────────────
+    -- Exact reference script logic, with the keymap bug fixed.
+    -- Threshold direction flips based on FNF.downscroll.
+    local function getThreshold()
+        -- downscroll: notes fall, receptor at bottom, fire when Y.Scale HIGH
+        -- upscroll:   notes rise, receptor at top,    fire when Y.Scale LOW
+        if FNF.downscroll then
+            return 0.4 + 1e-9 + FNF.delay
+        else
+            return 0.6 - 1e-9 - FNF.delay
+        end
+    end
+
+    local function noteTriggered(child, threshold)
+        if not child:IsA("GuiObject") then return false end
+        if FNF.downscroll then
+            return child.Position.Y.Scale > threshold
+        else
+            return child.Position.Y.Scale < threshold
+        end
+    end
+
+    local function autoplay()
+        while FNF.auto do
+            pcall(function()
+                local columns         = setupColumns()
+                local trackedChildren = {}
+                local threshold       = getThreshold()
+
+                -- Initial pass: catch notes already past threshold
+                for colNum, column in pairs(columns) do
+                    pcall(function()
+                        trackedChildren[colNum] = {}
+                        for _, child in ipairs(column:GetChildren()) do
+                            pcall(function()
+                                if noteTriggered(child, threshold) then
+                                    trackedChildren[colNum][child] = true
+                                    pressLane(colNum)
+                                end
+                            end)
+                        end
+                    end)
+                end
+
+                -- Inner heartbeat loop
+                while FNF.auto do
+                    pcall(function()
+                        threshold = getThreshold()
+
+                        for colNum, column in pairs(columns) do
+                            pcall(function()
+                                -- New notes crossing threshold
+                                for _, child in ipairs(column:GetChildren()) do
+                                    pcall(function()
+                                        if not trackedChildren[colNum][child]
+                                            and noteTriggered(child, threshold) then
+                                            trackedChildren[colNum][child] = true
+                                            pressLane(colNum)
+                                            -- Hold-note: 2 children = tail indicator
+                                            if #child:GetChildren() == 2 then
+                                                coroutine.wrap(function()
+                                                    pcall(function()
+                                                        while child.Parent
+                                                            and noteTriggered(child, threshold)
+                                                            and FNF.auto do
+                                                            RunService.Heartbeat:Wait()
+                                                        end
+                                                        releaseLane(colNum)
+                                                        trackedChildren[colNum][child] = nil
+                                                    end)
+                                                end)()
+                                            end
+                                        end
+                                    end)
+                                end
+                                -- Notes that left or passed threshold
+                                for child in pairs(trackedChildren[colNum]) do
+                                    pcall(function()
+                                        if not child:IsDescendantOf(column)
+                                            or not noteTriggered(child, threshold) then
+                                            if trackedChildren[colNum][child] then
+                                                releaseLane(colNum)
+                                            end
+                                            trackedChildren[colNum][child] = nil
+                                        end
+                                    end)
+                                end
+                            end)
+                        end
+                        RunService.Heartbeat:Wait()
+                    end)
+                end
+            end)
+        end
+    end
+
+    -- ── Random delay task ─────────────────────────────────────
+    local randThread = nil
+    local delayMax   = 0
+
+    local function startRandom()
+        if randThread then task.cancel(randThread) end
+        randThread = task.spawn(function()
+            while FNF.delayMode == "Random" do
+                FNF.delay = math.floor(math.random() * math.abs(delayMax) * 1000) / 1000
+                task.wait()
+            end
+        end)
+    end
+
+    -- ── Start / stop / toggle ─────────────────────────────────
+    local function setStatus(txt, col)
+        if statusLbl then
+            statusLbl.Text       = txt
+            statusLbl.TextColor3 = col or C.TextDim
+        end
+    end
+
+    local function syncToggleBtn(on)
+        if not botToggleBtn then return end
+        botToggleBtn.Text             = on and "ON"  or "OFF"
+        botToggleBtn.BackgroundColor3 = on and C.Accent or Color3.fromRGB(50,50,50)
+        botToggleBtn.TextColor3       = on and Color3.fromRGB(255,200,200) or C.TextDim
+    end
+
+    local function startBot()
+        FNF.notesHit = 0; FNF.combo = 0
+        FNF.auto     = true
+        detectSide()
+        detectScrollDir()
+        refreshKeys()
+
+        -- Validate we have at least one key
+        local hasKey = false
+        for i = 1,9 do
+            if laneKeys[i] ~= Enum.KeyCode.Unknown then hasKey = true; break end
+        end
+
+        local scrollDir = FNF.downscroll and "Down▼" or "Up▲"
+        setStatus(("ACTIVE  Side:%s  Scroll:%s  Keys:%s"):format(
+            FNF.side or "?", scrollDir, hasKey and "OK" or "NONE — refresh!"),
+            hasKey and C.AccentBrt or Color3.fromRGB(255,160,0))
+
+        showToast("FNF Bot", ("ACTIVE — Side:%s  %s"):format(
+            FNF.side or "?", scrollDir), C.AccentBrt)
+
+        syncToggleBtn(true)
+        coroutine.wrap(autoplay)()
+    end
+
+    local function stopBot()
+        FNF.auto = false
+        for i = 1, 9 do releaseLane(i) end
+        if randThread then task.cancel(randThread); randThread = nil end
+        setStatus(("STOPPED  Hits:%d  Best combo:%d"):format(
+            FNF.notesHit, FNF.maxCombo), C.TextDim)
+        showToast("FNF Bot", ("Stopped — Hits:%d  Best:%d"):format(
+            FNF.notesHit, FNF.maxCombo), C.Accent)
+        syncToggleBtn(false)
+    end
+
+    local function toggleBot()
+        if FNF.auto then stopBot() else startBot() end
+    end
+
+    -- ══════════════════════════════════════════════════════════
+    -- UI
+    -- ══════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "AUTO BOT", 1)
+
+    -- Status card
+    local statusCard = New("Frame", {
+        Size=UDim2.new(1,0,0,38), BackgroundColor3=Color3.fromRGB(10,5,5),
+        BorderSizePixel=0, LayoutOrder=2,
+    }, scroll)
+    Corner(6, statusCard); Stroke(C.Accent, 0.8, statusCard)
+
+    statusLbl = New("TextLabel", {
+        Text="Status: INACTIVE", Size=UDim2.new(1,-12,1,0),
+        Position=UDim2.new(0,6,0,0), BackgroundTransparency=1,
+        TextColor3=C.TextDim, Font=Enum.Font.Code, TextSize=10,
+        TextXAlignment=Enum.TextXAlignment.Left,
+    }, statusCard)
+
+    local _, _botBtn = makeToggle(scroll,
+        "Enable Auto-Bot",
+        "Reads real keys from game UI, correct threshold per scroll dir",
+        function(on)
+            if on then startBot() else stopBot() end
+        end, 3)
+    botToggleBtn = _botBtn
+
+    -- ── KEYBIND ───────────────────────────────────────────────
+    makeSectionLabel(scroll, "ACTIVATION KEYBIND", 4)
+
+    local kbCard = New("Frame", {
+        Size=UDim2.new(1,0,0,36), BackgroundColor3=C.Secondary,
+        BorderSizePixel=0, LayoutOrder=5,
+    }, scroll)
+    Corner(6, kbCard); Stroke(C.Border,0.5,kbCard)
+
+    New("TextLabel", {
+        Text="Toggle Bot Key:", Size=UDim2.new(0.48,0,1,0),
+        Position=UDim2.new(0,10,0,0), BackgroundTransparency=1,
+        TextColor3=C.TextDim, Font=Enum.Font.GothamBold,
+        TextSize=11, TextXAlignment=Enum.TextXAlignment.Left,
+    }, kbCard)
+
+    keybindBtn = New("TextButton", {
+        Text="Insert", Size=UDim2.new(0,112,0,22),
+        Position=UDim2.new(1,-120,0,7),
+        BackgroundColor3=C.Accent, TextColor3=Color3.new(1,1,1),
+        Font=Enum.Font.GothamBold, TextSize=11, BorderSizePixel=0,
+    }, kbCard)
+    Corner(4, keybindBtn)
+
+    local waitingRemap = false
+    keybindBtn.MouseButton1Click:Connect(function()
+        if waitingRemap then
+            waitingRemap = false
+            keybindBtn.Text             = tostring(FNF.keybind):match("KeyCode%.(.+)") or "Insert"
+            keybindBtn.BackgroundColor3 = C.Accent
+        else
+            waitingRemap                = true
+            keybindBtn.Text             = "Press a key..."
+            keybindBtn.BackgroundColor3 = Color3.fromRGB(170,140,0)
+        end
+    end)
+
+    -- Global InputBegan: handles both remap and activation
+    UserInputService.InputBegan:Connect(function(inp, gp)
+        if inp.UserInputType ~= Enum.UserInputType.Keyboard then return end
+
+        -- Keybind remap takes priority
+        if waitingRemap then
+            waitingRemap = false
+            if inp.KeyCode ~= Enum.KeyCode.Escape then
+                FNF.keybind = inp.KeyCode
+                local kname = tostring(inp.KeyCode):match("KeyCode%.(.+)") or "?"
+                keybindBtn.Text = kname
+                showToast("FNF Keybind", "Bot toggle set to: "..kname, C.AccentBrt)
+            else
+                keybindBtn.Text = tostring(FNF.keybind):match("KeyCode%.(.+)") or "Insert"
+            end
+            keybindBtn.BackgroundColor3 = C.Accent
+            return
+        end
+
+        -- Bot toggle — fires even when GUI is closed / on other tabs
+        if inp.KeyCode == FNF.keybind then
+            toggleBot()
+        end
+    end)
+
+    -- ── SIDE + SCROLL DIR ─────────────────────────────────────
+    makeSectionLabel(scroll, "SIDE  (stand on your pad first)", 6)
+
+    makeButton(scroll, "Auto-Detect Side + Scroll Direction", function()
+        detectSide()
+        detectScrollDir()
+        refreshKeys()
+        local ks = {}
+        for i = 1, 9 do
+            local kn = tostring(laneKeys[i]):match("KeyCode%.(.+)") or "?"
+            if kn ~= "Unknown" and kn ~= "?" then
+                table.insert(ks, ("L%d:%s"):format(i, kn))
+            end
+        end
+        local scrollDir = FNF.downscroll and "Downscroll▼" or "Upscroll▲"
+        setStatus(("Side:%s  %s  Keys:%s"):format(
+            FNF.side or "NOT FOUND", scrollDir,
+            #ks>0 and table.concat(ks," ") or "none"),
+            FNF.side and Color3.fromRGB(60,220,80) or Color3.fromRGB(255,80,80))
+        showToast("FNF Detect", (FNF.side or "No side").."  "..scrollDir,
+            FNF.side and Color3.fromRGB(60,220,80) or Color3.fromRGB(255,80,80))
+    end, 7)
+
+    -- Manual side + scroll dir row
+    local manualRow = New("Frame", {
+        Size=UDim2.new(1,0,0,36), BackgroundColor3=C.Secondary,
+        BorderSizePixel=0, LayoutOrder=8,
+    }, scroll)
+    Corner(6, manualRow); Stroke(C.Border, 0.5, manualRow)
+
+    local function makeSmallBtn(text, xOff, active)
+        local b = New("TextButton", {
+            Text=text, Size=UDim2.new(0,64,0,22),
+            Position=UDim2.new(0,xOff,0,7),
+            BackgroundColor3=active and C.Accent or C.Btn,
+            TextColor3=active and Color3.new(1,1,1) or C.TextDim,
+            Font=Enum.Font.GothamBold, TextSize=10, BorderSizePixel=0,
+        }, manualRow)
+        Corner(4, b); return b
+    end
+
+    local lBtn  = makeSmallBtn("LEFT",   8,   true)
+    local rBtn  = makeSmallBtn("RIGHT",  78,  false)
+    local dsBtn = makeSmallBtn("▼Down",  158, true)
+    local usBtn = makeSmallBtn("▲Up",    228, false)
+
+    lBtn.MouseButton1Click:Connect(function()
+        FNF.side="Left"; refreshKeys()
+        lBtn.BackgroundColor3=C.Accent; lBtn.TextColor3=Color3.new(1,1,1)
+        rBtn.BackgroundColor3=C.Btn;    rBtn.TextColor3=C.TextDim
+        setStatus("Side: Left"); showToast("FNF","Side → Left",C.AccentBrt)
+    end)
+    rBtn.MouseButton1Click:Connect(function()
+        FNF.side="Right"; refreshKeys()
+        rBtn.BackgroundColor3=C.Accent; rBtn.TextColor3=Color3.new(1,1,1)
+        lBtn.BackgroundColor3=C.Btn;    lBtn.TextColor3=C.TextDim
+        setStatus("Side: Right"); showToast("FNF","Side → Right",C.AccentBrt)
+    end)
+    dsBtn.MouseButton1Click:Connect(function()
+        FNF.downscroll=true
+        dsBtn.BackgroundColor3=C.Accent; dsBtn.TextColor3=Color3.new(1,1,1)
+        usBtn.BackgroundColor3=C.Btn;    usBtn.TextColor3=C.TextDim
+        showToast("FNF","Scroll → Downscroll ▼",C.AccentBrt)
+    end)
+    usBtn.MouseButton1Click:Connect(function()
+        FNF.downscroll=false
+        usBtn.BackgroundColor3=C.Accent; usBtn.TextColor3=Color3.new(1,1,1)
+        dsBtn.BackgroundColor3=C.Btn;    dsBtn.TextColor3=C.TextDim
+        showToast("FNF","Scroll → Upscroll ▲",C.AccentBrt)
+    end)
+
+    -- ── DELAY ─────────────────────────────────────────────────
+    makeSectionLabel(scroll, "TIMING / DELAY", 9)
+
+    local modeRow = New("Frame", {
+        Size=UDim2.new(1,0,0,36), BackgroundColor3=C.Secondary,
+        BorderSizePixel=0, LayoutOrder=10,
+    }, scroll)
+    Corner(6, modeRow); Stroke(C.Border, 0.5, modeRow)
+
+    New("TextLabel", {
+        Text="Mode:", Size=UDim2.new(0.28,0,1,0), Position=UDim2.new(0,10,0,0),
+        BackgroundTransparency=1, TextColor3=C.TextDim,
+        Font=Enum.Font.Gotham, TextSize=11, TextXAlignment=Enum.TextXAlignment.Left,
+    }, modeRow)
+
+    local stBtn = New("TextButton", {
+        Text="Static", Size=UDim2.new(0,90,0,22), Position=UDim2.new(0.3,0,0,7),
+        BackgroundColor3=C.Accent, TextColor3=Color3.new(1,1,1),
+        Font=Enum.Font.GothamBold, TextSize=11, BorderSizePixel=0,
+    }, modeRow); Corner(4, stBtn)
+
+    local rdBtn = New("TextButton", {
+        Text="Random", Size=UDim2.new(0,90,0,22), Position=UDim2.new(0.3,96,0,7),
+        BackgroundColor3=C.Btn, TextColor3=C.TextDim,
+        Font=Enum.Font.GothamBold, TextSize=11, BorderSizePixel=0,
+    }, modeRow); Corner(4, rdBtn)
+
+    stBtn.MouseButton1Click:Connect(function()
+        FNF.delayMode="Static"
+        if randThread then task.cancel(randThread); randThread=nil end
+        stBtn.BackgroundColor3=C.Accent; stBtn.TextColor3=Color3.new(1,1,1)
+        rdBtn.BackgroundColor3=C.Btn;    rdBtn.TextColor3=C.TextDim
+    end)
+    rdBtn.MouseButton1Click:Connect(function()
+        FNF.delayMode="Random"; startRandom()
+        rdBtn.BackgroundColor3=C.Accent; rdBtn.TextColor3=Color3.new(1,1,1)
+        stBtn.BackgroundColor3=C.Btn;    stBtn.TextColor3=C.TextDim
+    end)
+
+    makeSlider(scroll, "Note Delay ms  (neg=earlier, pos=later)", -40, 40, 1, 0, function(v)
+        delayMax = v / 100
+        if FNF.delayMode == "Static" then FNF.delay = delayMax end
+    end, 11)
+
+    -- ── KEY READOUT ───────────────────────────────────────────
+    makeSectionLabel(scroll, "LANE KEYS  (auto-read from game)", 12)
+
+    local keyCard = New("Frame", {
+        Size=UDim2.new(1,0,0,54), BackgroundColor3=C.Secondary,
+        BorderSizePixel=0, LayoutOrder=13,
+    }, scroll)
+    Corner(6, keyCard); Stroke(C.Border, 0.5, keyCard)
+
+    local keyLbl = New("TextLabel", {
+        Text="Set Side first, join a song, then press Refresh.",
+        Size=UDim2.new(1,-12,1,-26), Position=UDim2.new(0,6,0,4),
+        BackgroundTransparency=1, TextColor3=C.TextDim,
+        Font=Enum.Font.Code, TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        TextYAlignment=Enum.TextYAlignment.Top,
+    }, keyCard)
+
+    local kRefBtn = New("TextButton", {
+        Text="Refresh Keys from Game", Size=UDim2.new(1,-12,0,20),
+        Position=UDim2.new(0,6,1,-24),
+        BackgroundColor3=C.Accent, TextColor3=Color3.new(1,1,1),
+        Font=Enum.Font.GothamBold, TextSize=10, BorderSizePixel=0,
+    }, keyCard); Corner(4, kRefBtn)
+
+    kRefBtn.MouseButton1Click:Connect(function()
+        refreshKeys()
+        local parts = {}
+        for i = 1, 9 do
+            local kn = tostring(laneKeys[i]):match("KeyCode%.(.+)") or "?"
+            if kn ~= "Unknown" and kn ~= "?" then
+                table.insert(parts, ("L%d:%s"):format(i, kn))
+            end
+        end
+        if #parts == 0 then
+            keyLbl.Text       = "No keys found — join a song, set Side, then retry."
+            keyLbl.TextColor3 = Color3.fromRGB(255,80,80)
+        else
+            keyLbl.Text       = table.concat(parts, "  ")
+            keyLbl.TextColor3 = Color3.fromRGB(60,220,80)
+        end
+    end)
+
+    -- ════════════════════════════════════════════════════════
+    -- FEATURE 1: BOT OVERLAY HUD
+    -- ════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "BOT OVERLAY HUD", 14)
+
+    local hudGui = New("ScreenGui", {
+        Name="FNFBotHUD", ResetOnSpawn=false,
+        ZIndexBehavior=Enum.ZIndexBehavior.Sibling, Enabled=false,
+    }, PlayerGui)
+
+    local hudFrame = New("Frame", {
+        Size=UDim2.new(0,300,0,90), Position=UDim2.new(0.5,-150,0,8),
+        BackgroundColor3=Color3.fromRGB(5,3,3), BackgroundTransparency=0.12,
+        BorderSizePixel=0,
+    }, hudGui)
+    Corner(6, hudFrame); Stroke(C.Accent, 1, hudFrame)
+
+    local hudTitle = New("TextLabel", {
+        Text="BOT: INACTIVE", Size=UDim2.new(1,0,0,22),
+        Position=UDim2.new(0,0,0,3), BackgroundTransparency=1,
+        TextColor3=C.TextDim, Font=Enum.Font.GothamBold, TextSize=14,
+        TextXAlignment=Enum.TextXAlignment.Center, ZIndex=5,
+    }, hudFrame)
+    local hudStats = New("TextLabel", {
+        Text="NOTES: 0   COMBO: 0   BEST: 0   SIDE: ?",
+        Size=UDim2.new(1,0,0,16), Position=UDim2.new(0,0,0,27),
+        BackgroundTransparency=1, TextColor3=C.TextDim,
+        Font=Enum.Font.Code, TextSize=10,
+        TextXAlignment=Enum.TextXAlignment.Center, ZIndex=5,
+    }, hudFrame)
+    local hudInfo = New("TextLabel", {
+        Text="Delay:0.000  Scroll:Down▼  Key:Insert",
+        Size=UDim2.new(1,0,0,14), Position=UDim2.new(0,0,0,45),
+        BackgroundTransparency=1, TextColor3=C.TextDim,
+        Font=Enum.Font.Code, TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Center, ZIndex=5,
+    }, hudFrame)
+
+    local laneBars={}
+    local bW,bGap=26,2
+    local bStart=(300-(9*bW+8*bGap))/2
+    for li=1,9 do
+        local bar=New("Frame",{
+            Size=UDim2.new(0,bW,0,12),
+            Position=UDim2.new(0,bStart+(li-1)*(bW+bGap),0,64),
+            BackgroundColor3=Color3.fromRGB(20,8,8), BorderSizePixel=0, ZIndex=5,
+        }, hudFrame); Corner(2,bar)
+        New("TextLabel",{Text=tostring(li), Size=UDim2.new(1,0,1,0),
+            BackgroundTransparency=1, TextColor3=Color3.fromRGB(70,40,40),
+            Font=Enum.Font.GothamBold, TextSize=7,
+            TextXAlignment=Enum.TextXAlignment.Center, ZIndex=6,
+        }, bar)
+        laneBars[li]=bar
+    end
+
+    RunService.Heartbeat:Connect(function()
+        if not hudGui.Enabled then return end
+        hudTitle.Text       = FNF.auto and "BOT: ACTIVE" or "BOT: INACTIVE"
+        hudTitle.TextColor3 = FNF.auto and C.AccentBrt or C.TextDim
+        hudStats.Text=("NOTES:%d  COMBO:%d  BEST:%d  SIDE:%s"):format(
+            FNF.notesHit, FNF.combo, FNF.maxCombo, FNF.side or "?")
+        hudInfo.Text=("Delay:%.3f  Scroll:%s  Key:%s"):format(
+            FNF.delay,
+            FNF.downscroll and "Down▼" or "Up▲",
+            tostring(FNF.keybind):match("KeyCode%.(.+)") or "?")
+        local now=tick()
+        for li=1,9 do
+            laneBars[li].BackgroundColor3=(now-FNF.laneLastHit[li])<0.12
+                and (FNF.laneColors[li] or Color3.fromRGB(200,200,200))
+                or Color3.fromRGB(20,8,8)
+        end
+    end)
+
+    makeToggle(scroll, "Show Bot Overlay HUD",
+        "Top-centre: status, hits, combo, scroll dir, keybind, lanes",
+        function(on) hudGui.Enabled=on end, 15)
+
+    -- ════════════════════════════════════════════════════════
+    -- FEATURE 2: HUMANIZER
+    -- ════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "HUMANIZER", 16)
+    makeToggle(scroll,"Enable Humanizer",
+        "Random misses + jitter — looks human",
+        function(on) FNF.humanizerOn=on end, 17)
+    makeSlider(scroll,"Miss Rate %  (0=never)",0,25,1,3,
+        function(v) FNF.missRate=v/100 end, 18)
+    makeSlider(scroll,"Timing Jitter ms max",0,80,5,20,
+        function(v) FNF.jitterMax=v/1000 end, 19)
+
+    -- ════════════════════════════════════════════════════════
+    -- FEATURE 3: AUTO-PAUSE ON MENU
+    -- ════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "AUTO-PAUSE ON MENU", 20)
+    local autoPauseOn,wasBotOn=false,false
+    makeToggle(scroll,"Auto-Pause on Roblox Menu",
+        "Stops bot on menu open, resumes on close",
+        function(on) autoPauseOn=on end, 21)
+    game:GetService("GuiService").MenuOpened:Connect(function()
+        if autoPauseOn and FNF.auto then wasBotOn=true; stopBot() end
+    end)
+    game:GetService("GuiService").MenuClosed:Connect(function()
+        if autoPauseOn and wasBotOn then wasBotOn=false; startBot() end
+    end)
+
+    -- ════════════════════════════════════════════════════════
+    -- FEATURE 4: LIVE DEBUG
+    -- ════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "LIVE DEBUG", 22)
+
+    local dbCard=New("Frame",{
+        Size=UDim2.new(1,0,0,118), BackgroundColor3=C.Secondary,
+        BorderSizePixel=0, LayoutOrder=23,
+    }, scroll); Corner(6,dbCard); Stroke(C.Border,0.5,dbCard)
+
+    local dbLbl=New("TextLabel",{
+        Text="Enable toggle below.", Size=UDim2.new(1,-12,1,-8),
+        Position=UDim2.new(0,6,0,4), BackgroundTransparency=1,
+        TextColor3=C.TextDim, Font=Enum.Font.Code, TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        TextYAlignment=Enum.TextYAlignment.Top,
+    }, dbCard)
+
+    local dbConn=nil
+    makeToggle(scroll,"Live Debug",
+        "Real-time: path check, side, scroll, columns, keys",
+        function(on)
+            if on then
+                dbConn=RunService.Heartbeat:Connect(function()
+                    local ok,cols,notes=false,0,0
+                    pcall(function()
+                        local f=Player.PlayerGui.Window.Game.Fields
+                        ok=f~=nil
+                        if ok and FNF.side then
+                            local inner=f[FNF.side].Inner
+                            for i=1,9 do
+                                local lane=inner:FindFirstChild("Lane"..i)
+                                local n=lane and lane:FindFirstChild("Notes")
+                                if n then cols+=1; notes+=#n:GetChildren() end
+                            end
+                        end
+                    end)
+                    local ks=""
+                    for i=1,9 do
+                        local kn=tostring(laneKeys[i]):match("KeyCode%.(.+)") or "?"
+                        if kn~="Unknown" and kn~="?" then
+                            ks=ks..("L%d:%s "):format(i,kn)
+                        end
+                    end
+                    if ks=="" then ks="(none — join a song, set side, refresh)" end
+                    dbLbl.Text=("GUI Path : %s\nSide     : %s\nScroll   : %s\nColumns  : %d   Notes: %d\nThreshold: %.4f\nDelay    : %.3fs  Mode:%s\nKeybind  : %s\nKeys     : %s"):format(
+                        ok and "OK" or "NOT FOUND",
+                        FNF.side or "not set",
+                        FNF.downscroll and "Downscroll ▼" or "Upscroll ▲",
+                        cols, notes,
+                        getThreshold(),
+                        FNF.delay, FNF.delayMode,
+                        tostring(FNF.keybind):match("KeyCode%.(.+)") or "?",
+                        ks)
+                end)
+            else
+                if dbConn then dbConn:Disconnect(); dbConn=nil end
+                dbLbl.Text="Stopped."
+            end
+        end, 24)
+
+    makeButton(scroll,"Reset Bot Stats",function()
+        FNF.notesHit=0; FNF.combo=0; FNF.maxCombo=0
+    end, 25)
+
+    -- ── Background key refresh (mirrors reference while-true) ──
+    -- Uses innerFrame as a SEPARATE variable — never touches laneKeys.
+    task.spawn(function()
+        while true do
+            pcall(function()
+                local pg  = Player.PlayerGui
+                local gg  = pg:FindFirstChild("GameGui")
+                local win = gg and gg:FindFirstChild("Windows")
+                local ss  = win and win:FindFirstChild("SongSelector")
+                if ss and ss.Visible then detectSide() end
+                refreshKeys()   -- laneKeys only, never resets to Instance
+            end)
+            task.wait(0.5)
+        end
+    end)
+end
+
 -- TAB 7: TLB  (The Longest Battle — game-specific tools)
 -- ════════════════════════════════════════════════════════════════
 do
@@ -2391,6 +3309,11 @@ RunService.Heartbeat:Connect(function()
         hrp.CFrame = CFrame.new(hrp.Position.X, 60, hrp.Position.Z)
     end
 
+    -- GOD MODE
+    if S.GodMode and hum then
+        hum.Health = hum.MaxHealth
+    end
+
     -- ESP (refreshed each frame so boxes auto-expire via Debris)
     if S.ESP then
         for _, plr in ipairs(Players:GetPlayers()) do
@@ -2410,6 +3333,22 @@ RunService.Heartbeat:Connect(function()
                 end
             end
         end
+    end
+end)
+
+-- ════════════════════════════════════════════════════════════════
+-- CLICK TELEPORT  (LeftAlt + Left Click)
+-- ════════════════════════════════════════════════════════════════
+local _ctpMouse = Player:GetMouse()
+_ctpMouse.Button1Down:Connect(function()
+    if not S.ClickTp then return end
+    if not UserInputService:IsKeyDown(Enum.KeyCode.LeftAlt) then return end
+    local myChar = getChar()
+    local myHRP  = getHRP(myChar)
+    if not myHRP then return end
+    local hit = _ctpMouse.Hit
+    if hit then
+        myHRP.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3, 0))
     end
 end)
 
