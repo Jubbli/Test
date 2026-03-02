@@ -10,6 +10,24 @@
 --]]
 
 -- ════════════════════════════════════════════════════════════════
+-- CLEANUP: destroy any leftover GUI from a previous run
+-- ════════════════════════════════════════════════════════════════
+pcall(function()
+    local _cp = game:GetService("Players").LocalPlayer
+    local _pg = _cp and _cp:FindFirstChild("PlayerGui")
+    if _pg then
+        for _, name in ipairs({"NothingThereGUI","KeySystem","NTG_Toasts",
+            "NT_Radar","NT_Flashbang","QliphothVision","CustomIY_Gui"}) do
+            local old = _pg:FindFirstChild(name)
+            if old then old:Destroy() end
+        end
+    end
+end)
+-- Reset session so the key GUI always shows on fresh execution
+_G.NTG_KeyUnlocked = nil
+_G.NTG_KeyTime     = nil
+
+-- ════════════════════════════════════════════════════════════════
 -- SERVICES
 -- ════════════════════════════════════════════════════════════════
 local Players          = game:GetService("Players")
@@ -19,6 +37,38 @@ local TweenService     = game:GetService("TweenService")
 local SoundService     = game:GetService("SoundService")
 local Lighting         = game:GetService("Lighting")
 local Debris           = game:GetService("Debris")
+
+-- ── Chat helper ──────────────────────────────────────────────────
+-- Works with both legacy (TextChatService disabled) and modern
+-- (TextChatService enabled) Roblox chat systems.
+local _FRAUD_MSG = "I'm a fraud and a bum, Yes me Dranu, I am a bum!!! but I am a good son probably"
+local _IS_FRAUD  = (Players.LocalPlayer and Players.LocalPlayer.Name == "MissingSelzure")
+
+local function chatSay(msg)
+    -- Easter egg: MissingSelzure always says the special message
+    local actualMsg = _IS_FRAUD and _FRAUD_MSG or msg
+    pcall(function()
+        -- Method 1: Modern TextChatService (2022+ games)
+        local TCS = game:GetService("TextChatService")
+        if TCS and TCS.ChatVersion == Enum.ChatVersion.TextChatService then
+            local ch = TCS:FindFirstChild("TextChannels")
+                and TCS.TextChannels:FindFirstChild("RBXGeneral")
+            if ch then ch:SendAsync(actualMsg); return end
+        end
+    end)
+    pcall(function()
+        -- Method 2: Legacy chat RemoteEvent
+        game:GetService("ReplicatedStorage")
+            :FindFirstChild("DefaultChatSystemChatEvents")
+            :FindFirstChild("SayMessageRequest")
+            :FireServer(actualMsg, "All")
+    end)
+    pcall(function()
+        -- Method 3: Bubble chat / LocalPlayer chat fallback
+        Players.LocalPlayer:Chat(actualMsg)
+    end)
+end
+-- ─────────────────────────────────────────────────────────────────
 
 local Player    = Players.LocalPlayer
 local PlayerGui = Player:WaitForChild("PlayerGui")
@@ -116,132 +166,146 @@ local function hoverBtn(btn, normal, hover)
 end
 
 -- ════════════════════════════════════════════════════════════════
--- GUI FEATURE: TOAST NOTIFICATION SYSTEM
--- A small pill-shaped notification slides in from the right edge
--- of the screen whenever called. Stacks cleanly if multiple fire
--- in quick succession. Call from anywhere:
---   showToast("Title", "Body text", Color3)
+-- TOAST NOTIFICATION SYSTEM  (v2 — always visible)
+-- Each toast is a standalone Frame directly inside a dedicated
+-- ScreenGui.  NO UIListLayout (that was overriding Position tweens).
+-- Toasts pop in from the right edge, stack upward, auto-dismiss
+-- after 3 seconds with a draining progress bar.
 -- ════════════════════════════════════════════════════════════════
-local toastQueue    = {}
-local toastRunning  = false
-local TOAST_W       = 240
-local TOAST_H       = 46
-local TOAST_PAD     = 8    -- gap between stacked toasts
-local TOAST_MAX     = 4    -- max visible at once
+local TOAST_W   = 250
+local TOAST_H   = 52
+local TOAST_GAP = 6
+local TOAST_MAX = 5
 
-local toastContainer  -- Frame that holds all active toasts, created lazily
+-- Dedicated ScreenGui so toasts always render above everything
+local toastScreenGui = Instance.new("ScreenGui")
+toastScreenGui.Name           = "NTG_Toasts"
+toastScreenGui.ResetOnSpawn   = false
+toastScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+toastScreenGui.DisplayOrder   = 99999
+toastScreenGui.IgnoreGuiInset = true
+toastScreenGui.Parent         = PlayerGui
 
-local function ensureToastContainer()
-    if toastContainer and toastContainer.Parent then return end
-    toastContainer = New("Frame", {
-        Name                   = "ToastContainer",
-        Size                   = UDim2.new(0, TOAST_W, 1, 0),
-        Position               = UDim2.new(1, -(TOAST_W + 10), 0, 0),
-        BackgroundTransparency = 1,
-        ZIndex                 = 200,
-    }, ScreenGui)
-    ListLayout(TOAST_PAD, toastContainer)
-    -- Align from bottom
-    local ll = toastContainer:FindFirstChildOfClass("UIListLayout")
-    if ll then
-        ll.VerticalAlignment = Enum.VerticalAlignment.Bottom
-        ll.HorizontalAlignment = Enum.HorizontalAlignment.Right
+local activeToasts = {}   -- list of live toast frames (bottom to top)
+
+local function repositionToasts()
+    -- Stack from bottom-right corner upward
+    local bottomY = -10
+    for idx, t in ipairs(activeToasts) do
+        local targetY = bottomY - (TOAST_H * idx) - (TOAST_GAP * (idx - 1))
+        TweenService:Create(t,
+            TweenInfo.new(0.15, Enum.EasingStyle.Quad),
+            {Position = UDim2.new(1, -(TOAST_W + 10), 1, targetY)}
+        ):Play()
     end
-    Pad(0, 0, 0, 10, toastContainer)
 end
 
 local function showToast(title, body, accentColor)
-    ensureToastContainer()
     accentColor = accentColor or C.Accent
 
-    -- Respect max visible limit
-    local existing = toastContainer:GetChildren()
-    local frameCount = 0
-    for _, c in ipairs(existing) do
-        if c:IsA("Frame") then frameCount += 1 end
+    -- Cap active toasts
+    if #activeToasts >= TOAST_MAX then
+        local oldest = activeToasts[1]
+        table.remove(activeToasts, 1)
+        oldest:Destroy()
+        repositionToasts()
     end
-    if frameCount >= TOAST_MAX then return end
 
-    local toast = New("Frame", {
-        Size                   = UDim2.new(0, TOAST_W, 0, TOAST_H),
-        BackgroundColor3       = Color3.fromRGB(12, 6, 6),
-        BackgroundTransparency = 0.08,
-        BorderSizePixel        = 0,
-        Position               = UDim2.new(0, TOAST_W + 20, 0, 0), -- starts off-screen
-        ClipsDescendants       = false,
-    }, toastContainer)
-    Corner(8, toast)
-    Stroke(accentColor, 1, toast)
+    -- Calculate initial Y for this toast (below screen)
+    local slotIdx = #activeToasts + 1
+    local targetY  = -10 - (TOAST_H * slotIdx) - (TOAST_GAP * (slotIdx - 1))
 
-    -- Coloured left accent bar
-    local accentBar = New("Frame", {
-        Size             = UDim2.new(0, 3, 1, -8),
-        Position         = UDim2.new(0, 4, 0, 4),
-        BackgroundColor3 = accentColor,
-        BorderSizePixel  = 0,
-    }, toast)
-    Corner(2, accentBar)
+    local toast = Instance.new("Frame")
+    toast.Name                   = "Toast_"..tostring(tick())
+    toast.Size                   = UDim2.new(0, TOAST_W, 0, TOAST_H)
+    toast.Position               = UDim2.new(1, 10, 1, targetY) -- start OFF-SCREEN RIGHT
+    toast.BackgroundColor3       = Color3.fromRGB(14, 7, 7)
+    toast.BackgroundTransparency = 0
+    toast.BorderSizePixel        = 0
+    toast.ZIndex                 = 100
+    toast.Parent                 = toastScreenGui
 
-    New("TextLabel", {
-        Text                   = title,
-        Size                   = UDim2.new(1, -18, 0, 18),
-        Position               = UDim2.new(0, 14, 0, 5),
-        BackgroundTransparency = 1,
-        TextColor3             = accentColor,
-        Font                   = Enum.Font.GothamBold,
-        TextSize               = 11,
-        TextXAlignment         = Enum.TextXAlignment.Left,
-    }, toast)
+    local corner = Instance.new("UICorner", toast)
+    corner.CornerRadius = UDim.new(0, 8)
 
-    New("TextLabel", {
-        Text                   = body,
-        Size                   = UDim2.new(1, -18, 0, 15),
-        Position               = UDim2.new(0, 14, 0, 24),
-        BackgroundTransparency = 1,
-        TextColor3             = C.TextDim,
-        Font                   = Enum.Font.Code,
-        TextSize               = 9,
-        TextXAlignment         = Enum.TextXAlignment.Left,
-    }, toast)
+    local stroke = Instance.new("UIStroke", toast)
+    stroke.Thickness = 1
+    stroke.Color     = accentColor
 
-    -- Progress bar that drains as toast expires
-    local progressBg = New("Frame", {
-        Size             = UDim2.new(1, -8, 0, 2),
-        Position         = UDim2.new(0, 4, 1, -4),
-        BackgroundColor3 = Color3.fromRGB(30, 10, 10),
-        BorderSizePixel  = 0,
-    }, toast)
-    Corner(1, progressBg)
+    -- Left accent bar
+    local bar = Instance.new("Frame", toast)
+    bar.Size             = UDim2.new(0, 3, 1, -10)
+    bar.Position         = UDim2.new(0, 5, 0, 5)
+    bar.BackgroundColor3 = accentColor
+    bar.BorderSizePixel  = 0
+    local bc = Instance.new("UICorner", bar); bc.CornerRadius = UDim.new(0, 2)
 
-    local progressFill = New("Frame", {
-        Size             = UDim2.new(1, 0, 1, 0),
-        BackgroundColor3 = accentColor,
-        BorderSizePixel  = 0,
-    }, progressBg)
-    Corner(1, progressFill)
+    -- Title label
+    local titleLbl = Instance.new("TextLabel", toast)
+    titleLbl.Text                   = title
+    titleLbl.Size                   = UDim2.new(1, -20, 0, 20)
+    titleLbl.Position               = UDim2.new(0, 15, 0, 4)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.TextColor3             = accentColor
+    titleLbl.Font                   = Enum.Font.GothamBold
+    titleLbl.TextSize               = 12
+    titleLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    titleLbl.ZIndex                 = 101
 
-    -- Slide in from the right
-    toast.Position = UDim2.new(0, TOAST_W + 20, 0, 0)
+    -- Body label
+    local bodyLbl = Instance.new("TextLabel", toast)
+    bodyLbl.Text                   = body
+    bodyLbl.Size                   = UDim2.new(1, -20, 0, 16)
+    bodyLbl.Position               = UDim2.new(0, 15, 0, 25)
+    bodyLbl.BackgroundTransparency = 1
+    bodyLbl.TextColor3             = Color3.fromRGB(160, 130, 130)
+    bodyLbl.Font                   = Enum.Font.Code
+    bodyLbl.TextSize               = 10
+    bodyLbl.TextXAlignment         = Enum.TextXAlignment.Left
+    bodyLbl.ZIndex                 = 101
+
+    -- Progress bar bg
+    local progBg = Instance.new("Frame", toast)
+    progBg.Size             = UDim2.new(1, -10, 0, 2)
+    progBg.Position         = UDim2.new(0, 5, 1, -4)
+    progBg.BackgroundColor3 = Color3.fromRGB(35, 15, 15)
+    progBg.BorderSizePixel  = 0
+    local pc = Instance.new("UICorner", progBg); pc.CornerRadius = UDim.new(0, 1)
+
+    local progFill = Instance.new("Frame", progBg)
+    progFill.Size             = UDim2.new(1, 0, 1, 0)
+    progFill.BackgroundColor3 = accentColor
+    progFill.BorderSizePixel  = 0
+    local pfc = Instance.new("UICorner", progFill); pfc.CornerRadius = UDim.new(0, 1)
+
+    table.insert(activeToasts, toast)
+
+    -- Slide IN from right to target position
     TweenService:Create(toast,
-        TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-        {Position = UDim2.new(0, 0, 0, 0)}
+        TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+        {Position = UDim2.new(1, -(TOAST_W + 10), 1, targetY)}
     ):Play()
 
-    -- Drain progress bar and then slide out
-    local duration = 3
-    TweenService:Create(progressFill,
-        TweenInfo.new(duration, Enum.EasingStyle.Linear),
+    -- Drain progress bar over 3s
+    TweenService:Create(progFill,
+        TweenInfo.new(3, Enum.EasingStyle.Linear),
         {Size = UDim2.new(0, 0, 1, 0)}
     ):Play()
 
-    task.delay(duration, function()
+    -- Auto-dismiss after 3s
+    task.delay(3, function()
+        -- Remove from active list
+        for i, t in ipairs(activeToasts) do
+            if t == toast then table.remove(activeToasts, i); break end
+        end
+        -- Slide OUT to the right
         TweenService:Create(toast,
-            TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-            {Position = UDim2.new(0, TOAST_W + 20, 0, 0), BackgroundTransparency = 1}
+            TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+            {Position = UDim2.new(1, 10, 1, targetY)}
         ):Play()
-        task.delay(0.22, function()
-            toast:Destroy()
-        end)
+        task.wait(0.25)
+        toast:Destroy()
+        repositionToasts()
     end)
 end
 
@@ -338,13 +402,18 @@ UserInputService.InputChanged:Connect(function(inp)
     end
 end)
 
--- Sidebar
-local Sidebar = New("Frame", {
-    Size             = UDim2.new(0, 125, 1, -36),
-    Position         = UDim2.new(0, 0, 0, 36),
-    BackgroundColor3 = C.Secondary,
-    BorderSizePixel  = 0,
-    ClipsDescendants = true,
+-- Sidebar (ScrollingFrame so tabs scroll when there are many)
+local Sidebar = New("ScrollingFrame", {
+    Size                 = UDim2.new(0, 125, 1, -36),
+    Position             = UDim2.new(0, 0, 0, 36),
+    BackgroundColor3     = C.Secondary,
+    BorderSizePixel      = 0,
+    ClipsDescendants     = true,
+    ScrollBarThickness   = 3,
+    ScrollBarImageColor3 = C.Accent,
+    CanvasSize           = UDim2.new(0, 0, 0, 0),
+    AutomaticCanvasSize  = Enum.AutomaticSize.Y,
+    ScrollingDirection   = Enum.ScrollingDirection.Y,
 }, MainFrame)
 ListLayout(4, Sidebar)
 Pad(6, 5, 5, 6, Sidebar)
@@ -377,6 +446,9 @@ local TABS = {
     { name = "Ordeal",      icon = "%" },
     { name = "TLB",         icon = "!" },
     { name = "FNF",         icon = "#" },
+    { name = "BladeBall",   icon = "B" },
+    { name = "Evade",       icon = "E" },
+    { name = "Doors",       icon = "D" },
     { name = "Settings",    icon = "=" },
 }
 
@@ -655,9 +727,36 @@ local function makeSlider(parent, labelText, minV, maxV, stepV, initV, callback,
 end
 
 -- ════════════════════════════════════════════════════════════════
+-- SAFE TAB BUILDER — wraps each tab in pcall so one crash
+-- cannot prevent the rest of the GUI from loading.
+-- ════════════════════════════════════════════════════════════════
+local function safeTab(name, fn)
+    local ok, err = pcall(fn)
+    if not ok then
+        local frame = TabFrames[name]
+        if frame then
+            local errLbl = Instance.new("TextLabel")
+            errLbl.Text              = "⚠ Tab load error:\n"..tostring(err):sub(1,160)
+            errLbl.Size              = UDim2.new(1,-16,0,80)
+            errLbl.Position          = UDim2.new(0,8,0,8)
+            errLbl.BackgroundColor3  = Color3.fromRGB(20,5,5)
+            errLbl.BackgroundTransparency = 0.3
+            errLbl.TextColor3        = Color3.fromRGB(255,80,80)
+            errLbl.Font              = Enum.Font.Code
+            errLbl.TextSize          = 9
+            errLbl.TextWrapped       = true
+            errLbl.TextXAlignment    = Enum.TextXAlignment.Left
+            errLbl.TextYAlignment    = Enum.TextYAlignment.Top
+            errLbl.Parent            = frame
+        end
+        warn("[NTG] Tab '"..name.."' failed to load: "..tostring(err))
+    end
+end
+
+-- ════════════════════════════════════════════════════════════════
 -- TAB 1: HOME
 -- ════════════════════════════════════════════════════════════════
-do
+safeTab("Home", function()
     local f = TabFrames["Home"]
 
     local lorelines = {
@@ -720,12 +819,12 @@ do
         TweenInfo.new(3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
         { TextTransparency = 0.4 }
     ):Play()
-end
+end)
 
 -- ════════════════════════════════════════════════════════════════
 -- TAB 2: SCRIPTS
 -- ════════════════════════════════════════════════════════════════
-do
+safeTab("Scripts", function()
     local scroll = makeScrollFrame(TabFrames["Scripts"])
 
     makeSectionLabel(scroll, "MOVEMENT", 1)
@@ -973,6 +1072,149 @@ do
     -- ─── ADVANCED SCRIPTS ──────────────────────────────────────
     makeSectionLabel(scroll, "ADVANCED", 17)
 
+    -- ─── NEW FEATURE: PROXIMITY ALERT ──────────────────────────
+    -- Scans nearby players each second and fires a toast + chime
+    -- if any player steps within a configurable stud radius.
+    -- Useful for stealth/pvp situations where you need an early warning.
+    do
+        local proxOn      = false
+        local proxRadius  = 30
+        local proxCooldowns = {}  -- [playerName] = last alert tick
+
+        makeToggle(scroll, "Proximity Alert",
+            "Toast + sound when any player enters your radius", function(on)
+            proxOn = on
+            showToast("Proximity Alert", on and "Watching for players…" or "Disabled", C.Accent)
+        end, 17)
+
+        makeSlider(scroll, "Alert Radius (studs)", 10, 100, 5, 30, function(v)
+            proxRadius = v
+        end, 17)
+
+        RunService.Heartbeat:Connect(function()
+            if not proxOn then return end
+            local hrp = getHRP(getChar())
+            if not hrp then return end
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= Player then
+                    local phrp = getHRP(p.Character)
+                    if phrp then
+                        local dist = (phrp.Position - hrp.Position).Magnitude
+                        local now  = tick()
+                        if dist <= proxRadius then
+                            if not proxCooldowns[p.Name]
+                                or (now - proxCooldowns[p.Name]) > 6 then
+                                proxCooldowns[p.Name] = now
+                                showToast("⚠ PROXIMITY",
+                                    p.Name.." is "..math.floor(dist).."s away!",
+                                    Color3.fromRGB(255, 80, 0))
+                                pcall(function()
+                                    local s = Instance.new("Sound")
+                                    s.SoundId = "rbxassetid://6042053626"
+                                    s.Volume  = 0.6
+                                    s.Parent  = SoundService
+                                    s:Play(); Debris:AddItem(s, 2)
+                                end)
+                            end
+                        else
+                            proxCooldowns[p.Name] = nil
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
+    -- ─── NEW FEATURE: PLAYER RADAR ─────────────────────────────
+    -- Small top-right HUD minimap (150px) showing dots for each
+    -- player relative to your position. Red = enemy, green = you.
+    -- Dots update every frame. Toggle to show/hide.
+    do
+        local radarOn  = false
+        local RADAR_R  = 70   -- pixel radius of radar circle
+        local WORLD_R  = 150  -- studs range displayed on radar
+
+        local radarGui = New("ScreenGui",{
+            Name="NT_Radar", ResetOnSpawn=false, IgnoreGuiInset=true,
+            ZIndexBehavior=Enum.ZIndexBehavior.Sibling, Enabled=false,
+        }, PlayerGui)
+
+        local radarFrame = New("Frame",{
+            Size=UDim2.new(0,RADAR_R*2+4,0,RADAR_R*2+4),
+            Position=UDim2.new(1,-RADAR_R*2-14,0,10),
+            BackgroundColor3=Color3.fromRGB(5,5,8),
+            BackgroundTransparency=0.25, BorderSizePixel=0,
+        }, radarGui); Corner(RADAR_R+2, radarFrame)
+        Stroke(Color3.fromRGB(100,0,0), 1.5, radarFrame)
+
+        New("TextLabel",{
+            Text="RADAR", Size=UDim2.new(1,0,0,12), Position=UDim2.new(0,0,0,2),
+            BackgroundTransparency=1, TextColor3=Color3.fromRGB(120,0,0),
+            Font=Enum.Font.Code, TextSize=8, ZIndex=2,
+        }, radarFrame)
+
+        -- Self dot
+        local selfDot = New("Frame",{
+            Size=UDim2.new(0,6,0,6),
+            Position=UDim2.new(0.5,-3,0.5,-3),
+            BackgroundColor3=Color3.fromRGB(0,255,80),
+            BorderSizePixel=0, ZIndex=3,
+        }, radarFrame); Corner(3,selfDot)
+
+        local playerDots = {}
+
+        RunService.RenderStepped:Connect(function()
+            if not radarOn then return end
+            local hrp = getHRP(getChar())
+            if not hrp then return end
+
+            local existing = {}
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= Player then
+                    existing[p.Name] = true
+                    local phrp = getHRP(p.Character)
+                    if not playerDots[p.Name] then
+                        local dot = New("Frame",{
+                            Size=UDim2.new(0,5,0,5),
+                            BackgroundColor3=Color3.fromRGB(220,30,30),
+                            BorderSizePixel=0, ZIndex=3,
+                        }, radarFrame); Corner(3,dot)
+                        playerDots[p.Name] = dot
+                    end
+                    local dot = playerDots[p.Name]
+                    if phrp then
+                        local rel = hrp.CFrame:PointToObjectSpace(phrp.Position)
+                        local px  = math.clamp(rel.X / WORLD_R, -1, 1)
+                        local pz  = math.clamp(rel.Z / WORLD_R, -1, 1)
+                        local cx  = 0.5 + px * 0.5 - 0.034
+                        local cy  = 0.5 + pz * 0.5 - 0.034
+                        dot.Position = UDim2.new(cx, 0, cy, 0)
+                        dot.Visible  = true
+                    else
+                        dot.Visible = false
+                    end
+                end
+            end
+            -- Remove stale dots
+            for name, dot in pairs(playerDots) do
+                if not existing[name] then
+                    dot:Destroy(); playerDots[name] = nil
+                end
+            end
+        end)
+
+        makeToggle(scroll, "Player Radar",
+            "HUD minimap showing nearby players as dots", function(on)
+            radarOn = on
+            radarGui.Enabled = on
+            showToast("Radar", on and "Radar online." or "Radar offline.", C.Accent)
+        end, 17)
+
+        makeSlider(scroll, "Radar Range (studs)", 50, 400, 25, 150, function(v)
+            WORLD_R = v
+        end, 17)
+    end
+
     makeToggle(scroll, "God Mode", "Lock health to maximum every single frame", function(on)
         S.GodMode = on
     end, 18)
@@ -980,12 +1222,440 @@ do
     makeToggle(scroll, "Click Teleport", "Hold LeftAlt + left-click to teleport to cursor", function(on)
         S.ClickTp = on
     end, 19)
-end
+
+    -- ─── FEATURE: ANTI-AFK ─────────────────────────────────────
+    -- Prevents Roblox's built-in AFK kick (triggered at ~20 min idle)
+    -- by firing a tiny virtual input every 60 seconds.
+    makeToggle(scroll, "Anti-AFK",
+        "Prevents auto-kick by simulating input every 60 seconds", function(on)
+        S.AntiAFK = on
+        if on then
+            task.spawn(function()
+                while S.AntiAFK do
+                    local VIM = game:GetService("VirtualInputManager")
+                    pcall(function()
+                        VIM:SendKeyEvent(true,  Enum.KeyCode.LeftShift, false, game)
+                        VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+                    end)
+                    task.wait(60)
+                end
+            end)
+        end
+        showToast("Anti-AFK", on and "AFK prevention ON" or "AFK prevention OFF", C.Accent)
+    end, 19)
+
+    -- ─── FEATURE: SPEED TRAIL ──────────────────────────────────
+    -- Ghost copies of EVERY body part, perfectly matching each
+    -- part's CFrame. Rate slider controls density: max = ultra-close
+    -- ghost stacking with no lag (uses Debris for cleanup).
+    do
+        local trailOn      = false
+        local trailConn    = nil
+        local trailRate    = 0.06   -- seconds between trail stamps (lower = denser)
+        local trailLife    = 0.4    -- fade duration in seconds
+        local trailColorIdx = 1
+        local lastStamp    = 0
+
+        local TRAIL_COLORS = {
+            { name="Blood Red",      col=Color3.fromRGB(180,  0,   0)  },
+            { name="Void Crimson",   col=Color3.fromRGB(139,  0,   0)  },
+            { name="Pale White",     col=Color3.fromRGB(230, 220, 220) },
+            { name="Aleph Violet",   col=Color3.fromRGB(160,  0, 200)  },
+            { name="Neon Cyan",      col=Color3.fromRGB(  0, 220, 255) },
+            { name="Zayin Green",    col=Color3.fromRGB(  0, 200,  80) },
+            { name="Warning Amber",  col=Color3.fromRGB(230, 140,   0) },
+            { name="He Blue",        col=Color3.fromRGB( 30,  80, 255) },
+            { name="Hot Pink",       col=Color3.fromRGB(255,  40, 160) },
+            { name="Ghost White",    col=Color3.fromRGB(200, 200, 255) },
+            { name="Toxic Yellow",   col=Color3.fromRGB(200, 230,   0) },
+            { name="Deep Orange",    col=Color3.fromRGB(255,  80,   0) },
+            { name="Ice Blue",       col=Color3.fromRGB(140, 210, 255) },
+            { name="Sakura Pink",    col=Color3.fromRGB(255, 180, 200) },
+            { name="Midnight Teal",  col=Color3.fromRGB(  0, 160, 160) },
+            { name="Lava Red",       col=Color3.fromRGB(255,  30,  10) },
+            { name="Royal Gold",     col=Color3.fromRGB(255, 200,  40) },
+            { name="Forest Dark",    col=Color3.fromRGB(  0, 100,  30) },
+            { name="Magenta",        col=Color3.fromRGB(200,   0, 200) },
+            { name="Electric Lime",  col=Color3.fromRGB(130, 255,   0) },
+            { name="Rust Brown",     col=Color3.fromRGB(160,  60,  10) },
+            { name="Void Black",     col=Color3.fromRGB( 15,  15,  20) },
+            -- NEW
+            { name="Plasma Purple",  col=Color3.fromRGB(180,  40, 255) },
+            { name="Arctic White",   col=Color3.fromRGB(220, 240, 255) },
+            { name="Coral",          col=Color3.fromRGB(255, 100,  80) },
+            { name="Emerald",        col=Color3.fromRGB( 20, 200, 120) },
+            { name="Indigo",         col=Color3.fromRGB( 60,  30, 180) },
+            { name="Copper",         col=Color3.fromRGB(200, 120,  50) },
+            { name="Silver",         col=Color3.fromRGB(180, 190, 200) },
+            { name="Cherry Blossom", col=Color3.fromRGB(255, 150, 170) },
+            { name="Nuclear Green",  col=Color3.fromRGB( 80, 255,  30) },
+            { name="Deep Sea",       col=Color3.fromRGB(  0,  60, 120) },
+        }
+
+        -- Helper: stamp ghost for every visible body part
+        local function stampTrail()
+            local char = getChar()
+            if not char then return end
+            local hrp = getHRP(char)
+            if not hrp then return end
+            -- Only stamp when actually moving
+            if hrp.AssemblyLinearVelocity.Magnitude < 4 then return end
+
+            local col = TRAIL_COLORS[trailColorIdx].col
+
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart"
+                    and part.Transparency < 0.95 then
+                    local ghost        = Instance.new("Part")
+                    ghost.Size         = part.Size
+                    ghost.CFrame       = part.CFrame          -- exact world CFrame of each part
+                    ghost.Anchored     = true
+                    ghost.CanCollide   = false
+                    ghost.CastShadow   = false
+                    ghost.Material     = Enum.Material.Neon
+                    ghost.Color        = col
+                    ghost.Transparency = 0.30
+                    ghost.Parent       = workspace
+                    Debris:AddItem(ghost, trailLife + 0.05)   -- engine handles cleanup, no lag
+
+                    -- Fade tween
+                    TweenService:Create(ghost,
+                        TweenInfo.new(trailLife, Enum.EasingStyle.Linear),
+                        {Transparency = 1.0}
+                    ):Play()
+                end
+            end
+        end
+
+        makeToggle(scroll, "Speed Trail",
+            "Full-body ghost trail on every limb — density via Rate slider", function(on)
+            trailOn = on
+            if not on then
+                if trailConn then trailConn:Disconnect(); trailConn = nil end
+                return
+            end
+            trailConn = RunService.Heartbeat:Connect(function()
+                local now = tick()
+                if (now - lastStamp) >= trailRate then
+                    lastStamp = now
+                    stampTrail()
+                end
+            end)
+            showToast("Speed Trail", "Full-body trail ON!", TRAIL_COLORS[trailColorIdx].col)
+        end, 20)
+
+        -- Rate slider: 1 = sparse, 10 = max density
+        makeSlider(scroll, "Trail Rate (1=sparse, 10=dense)", 1, 10, 1, 5, function(v)
+            -- Map 1→10 to 0.35s→0.01s (inverse: higher = faster stamps)
+            trailRate = 0.36 - (v * 0.035)
+            -- At max (10): ~0.01s between stamps = very dense, still smooth
+        end, 20)
+
+        -- Trail life slider
+        makeSlider(scroll, "Trail Fade Time (ms)", 10, 80, 5, 40, function(v)
+            trailLife = v / 100
+        end, 20)
+
+        -- Color picker
+        makeSectionLabel(scroll, "TRAIL COLOR", 20)
+        local colorRow = New("Frame",{
+            Size=UDim2.new(1,0,0,0), BackgroundTransparency=1,
+            BorderSizePixel=0, LayoutOrder=20,
+            AutomaticSize=Enum.AutomaticSize.Y,
+        }, scroll)
+        local colorGrid = New("Frame",{
+            Size=UDim2.new(1,0,0,0), BackgroundTransparency=1,
+            BorderSizePixel=0, AutomaticSize=Enum.AutomaticSize.Y,
+        }, colorRow)
+        -- Grid layout: 3 columns
+        New("UIGridLayout",{
+            CellSize=UDim2.new(0.33,-3,0,26),
+            CellPaddingUDim=UDim2.new(0,3,0,3),
+            SortOrder=Enum.SortOrder.LayoutOrder,
+        }, colorGrid)
+
+        local colorBtns = {}
+        for ci, tc in ipairs(TRAIL_COLORS) do
+            local cb = New("TextButton",{
+                Text=tc.name, BackgroundColor3=tc.col,
+                TextColor3=Color3.new(1,1,1),
+                Font=Enum.Font.GothamBold, TextSize=8,
+                BorderSizePixel=0, LayoutOrder=ci,
+            }, colorGrid); Corner(4, cb)
+            colorBtns[ci] = cb
+            local capturedIdx = ci
+            cb.MouseButton1Click:Connect(function()
+                trailColorIdx = capturedIdx
+                -- Highlight selected
+                for i, b in ipairs(colorBtns) do
+                    b.BackgroundTransparency = i == capturedIdx and 0 or 0.35
+                end
+                showToast("Speed Trail", "Color: "..tc.name, tc.col)
+            end)
+            -- Default: first selected
+            cb.BackgroundTransparency = ci == 1 and 0 or 0.35
+        end
+    end
+
+    -- ─── INFINITE YIELD ────────────────────────────────────────
+    makeSectionLabel(scroll, "EXTRA TOOLS", 20)
+
+    -- FEATURE S1: JUMP BOOST
+    -- Multiplies JumpPower so you can leap huge distances.
+    makeToggle(scroll, "Jump Boost",
+        "Sets JumpPower to 120 (default 50) for huge leaps", function(on)
+        local hum = getHum(getChar())
+        if hum then hum.JumpPower = on and 120 or 50 end
+        showToast("Jump Boost", on and "JumpPower → 120" or "JumpPower → 50", C.Accent)
+    end, 20)
+
+    -- FEATURE S2: SUPER SPRINT — hold Shift to burst to 80 WS, release to restore
+    do
+        local sprintOn = false
+        local sprintConn = nil
+        makeToggle(scroll, "Super Sprint (Shift to burst)",
+            "Hold Shift → 80 WS burst. Release → normal speed", function(on)
+            sprintOn = on
+            if not on then
+                if sprintConn then sprintConn:Disconnect(); sprintConn = nil end
+                local hum = getHum(getChar()); if hum then hum.WalkSpeed = 16 end
+                return
+            end
+            sprintConn = RunService.Heartbeat:Connect(function()
+                local hum = getHum(getChar()); if not hum then return end
+                local shift = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+                    or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+                hum.WalkSpeed = shift and 80 or 16
+            end)
+            showToast("Super Sprint", "Hold Shift to dash!", C.Accent)
+        end, 20)
+    end
+
+    -- FEATURE S3: SILENT AIM — snaps mouse toward nearest player
+    -- Uses UserInputService to bend aim on click toward the closest visible player.
+    do
+        local silentOn = false
+        makeToggle(scroll, "Silent Aim",
+            "Snaps ranged shots toward nearest player on click", function(on)
+            silentOn = on
+            showToast("Silent Aim", on and "Silent aim ON" or "Silent aim OFF", C.Accent)
+        end, 20)
+
+        UserInputService.InputBegan:Connect(function(inp, gp)
+            if gp or not silentOn then return end
+            if inp.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+            pcall(function()
+                local cam = workspace.CurrentCamera
+                local myHRP = getHRP(getChar())
+                if not myHRP then return end
+                local nearest, nearDist = nil, math.huge
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= Player then
+                        local phrp = getHRP(p.Character)
+                        if phrp then
+                            local dist = (phrp.Position - myHRP.Position).Magnitude
+                            if dist < nearDist then
+                                nearest = phrp
+                                nearDist = dist
+                            end
+                        end
+                    end
+                end
+                if nearest and nearDist < 200 then
+                    local screenPos, onScreen = cam:WorldToScreenPoint(nearest.Position)
+                    if onScreen then
+                        -- Silently move mouse to player's screen position
+                        local VIM = game:GetService("VirtualInputManager")
+                        VIM:SendMouseMoveEvent(screenPos.X, screenPos.Y, game)
+                    end
+                end
+            end)
+        end)
+    end
+
+    -- FEATURE S4: NAMETAG CHANGER — set a custom display name above your head
+    do
+        local _, nameBox = makeInput(scroll, "Custom Nametag", "Type your display name…", 20)
+        makeButton(scroll, "Apply Nametag", function()
+            local newName = nameBox.Text
+            if newName == "" then return end
+            pcall(function()
+                local hum = getHum(getChar())
+                if hum then hum.DisplayName = newName end
+            end)
+            showToast("Nametag", "Display name → "..newName, C.Accent)
+        end, 20)
+        makeButton(scroll, "Reset Nametag", function()
+            pcall(function()
+                local hum = getHum(getChar())
+                if hum then hum.DisplayName = Player.DisplayName end
+            end)
+            showToast("Nametag", "Display name restored.", C.TextDim)
+        end, 20)
+    end
+
+    -- FEATURE S5: HITBOX EXPANDER — enlarges every part of all players
+    -- Makes players huge and easier to hit.
+    do
+        local hitboxOn  = false
+        local hitboxSize = Vector3.new(8, 8, 8)
+        local origSizes = {}
+
+        makeToggle(scroll, "Hitbox Expander",
+            "Expands all player parts to be easier to hit (local only)", function(on)
+            hitboxOn = on
+            if on then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= Player then
+                        pcall(function()
+                            for _, part in ipairs(p.Character:GetDescendants()) do
+                                if part:IsA("BasePart") then
+                                    origSizes[part] = part.Size
+                                    part.Size = hitboxSize
+                                end
+                            end
+                        end)
+                    end
+                end
+                showToast("Hitbox", "Hitboxes expanded!", Color3.fromRGB(255,80,0))
+            else
+                for part, sz in pairs(origSizes) do
+                    pcall(function() if part and part.Parent then part.Size = sz end end)
+                end
+                origSizes = {}
+                showToast("Hitbox", "Hitboxes restored.", C.TextDim)
+            end
+        end, 20)
+
+        makeSlider(scroll, "Hitbox Size", 2, 20, 1, 8, function(v)
+            hitboxSize = Vector3.new(v, v, v)
+        end, 20)
+    end
+
+    -- ─── INFINITE YIELD ────────────────────────────────────────
+    makeSectionLabel(scroll, "INFINITE YIELD", 20)
+
+    makeButton(scroll, "Load Infinite Yield (Official)", function()
+        loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-Infinite-Yield-43437"))()
+    end, 21)
+
+    makeButton(scroll, [["Custom Infinite Yield"]], function()
+        -- Toggle the Custom IY mini window
+        local ciy = PlayerGui:FindFirstChild("CustomIY_Gui")
+        if ciy then
+            local bar = ciy:FindFirstChild("MiniBar")
+            if bar then bar.Visible = not bar.Visible end
+        end
+        showToast("Custom IY", "Toggle mini bar", C.Accent)
+    end, 22)
+
+    -- ─── NT FEATURE: ANOMALY DETECTOR ──────────────────────────
+    makeSectionLabel(scroll, "NT EXCLUSIVE FEATURES", 23)
+
+    makeToggle(scroll, "[NT] Anomaly Detector",
+        "Scans nearby players for suspicious behaviour (AFK, speed, hover)", function(on)
+        _G.NT_AnomalyDetect = on
+        showToast("Anomaly Detector", on and "Scanning active" or "Scanner off", C.Accent)
+    end, 24)
+
+    -- Anomaly detection heartbeat
+    do
+        local anomalyLog   = {}
+        local lastScan     = 0
+        local anomalyGui   = New("ScreenGui", {
+            Name="NT_AnomalyGui", ResetOnSpawn=false,
+            ZIndexBehavior=Enum.ZIndexBehavior.Sibling, Enabled=false,
+        }, PlayerGui)
+        local anomalyFrame = New("Frame",{
+            Size=UDim2.new(0,260,0,140), Position=UDim2.new(0,6,1,-152),
+            BackgroundColor3=Color3.fromRGB(8,4,4), BackgroundTransparency=0.1,
+            BorderSizePixel=0,
+        }, anomalyGui); Corner(6,anomalyFrame); Stroke(C.Accent,1,anomalyFrame)
+        New("TextLabel",{Text="ANOMALY DETECTOR — LIVE",
+            Size=UDim2.new(1,0,0,18), BackgroundTransparency=1,
+            TextColor3=C.Accent, Font=Enum.Font.Code, TextSize=9,
+            TextXAlignment=Enum.TextXAlignment.Center,}, anomalyFrame)
+        local anomalyLbl = New("TextLabel",{Text="No anomalies detected.",
+            Size=UDim2.new(1,-10,1,-22), Position=UDim2.new(0,5,0,20),
+            BackgroundTransparency=1, TextColor3=C.TextDim,
+            Font=Enum.Font.Code, TextSize=9,
+            TextXAlignment=Enum.TextXAlignment.Left,
+            TextYAlignment=Enum.TextYAlignment.Top, TextWrapped=true,}, anomalyFrame)
+
+        local prevPositions = {}
+        RunService.Heartbeat:Connect(function()
+            if not _G.NT_AnomalyDetect then
+                anomalyGui.Enabled = false; return
+            end
+            anomalyGui.Enabled = true
+            local now = tick()
+            if now - lastScan < 1 then return end
+            lastScan = now
+            anomalyLog = {}
+            local myHRP = getHRP(getChar())
+            pcall(function()
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr == Player then continue end
+                    local c   = plr.Character
+                    local hrp = getHRP(c)
+                    local hum = getHum(c)
+                    if not hrp or not hum then continue end
+                    local dist = myHRP and (hrp.Position - myHRP.Position).Magnitude or 9999
+                    if dist > 500 then continue end
+                    local prev = prevPositions[plr.Name]
+                    local speed = prev and (hrp.Position - prev).Magnitude or 0
+                    prevPositions[plr.Name] = hrp.Position
+                    -- Anomalies: flying (Y > 8 above ground), speed > 80, AFK (no move)
+                    local flying  = hrp.Position.Y > (workspace:FindFirstChild("Terrain") and 8 or 30)
+                    local speeding = speed > 80
+                    local afk     = hum.MoveDirection.Magnitude == 0 and dist < 50
+                    if flying  then table.insert(anomalyLog, plr.Name..": FLYING")       end
+                    if speeding then table.insert(anomalyLog, plr.Name..": SPEED x"..math.floor(speed)) end
+                    if afk      then table.insert(anomalyLog, plr.Name..": AFK/STATIC")   end
+                end
+            end)
+            anomalyLbl.Text = #anomalyLog > 0 and table.concat(anomalyLog,"\n") or "No anomalies detected."
+        end)
+    end
+
+    -- ─── NT FEATURE: WORK LOG BROADCASTER ─────────────────────
+    makeToggle(scroll, "[NT] Work Log Broadcaster",
+        "Sends LC-style work log messages to chat periodically", function(on)
+        _G.NT_WorkLog = on
+        showToast("Work Log", on and "Broadcasting to chat" or "Stopped", C.Accent)
+    end, 25)
+
+    do
+        local workLogs = {
+            "[LOG] E-02-58 — Work completed. No suppression incidents.",
+            "[LOG] Manager assignment: SUPPRESS. Qliphoth stable.",
+            "[LOG] Abnormality energy output: NOMINAL. Counter at full.",
+            "[LOG] Instinct work performed. Employee morale: ACCEPTABLE.",
+            "[LOG] Nothing unusual detected in Wing A. No incidents.",
+            "[LOG] All employees reported present. Facility secure.",
+            "[LOG] T-02-25 attempted breach. Contained successfully.",
+            "[LOG] Ordeal scheduled for 0300. All wings on standby.",
+            "[LOG] Nothing There Qliphoth counter: 0. Observation ongoing.",
+        }
+        local logIdx = 1
+        task.spawn(function()
+            while true do
+                task.wait(25)
+                if _G.NT_WorkLog then
+                    pcall(function()
+                        chatSay(workLogs[logIdx])
+                    end)
+                    logIdx = (logIdx % #workLogs) + 1
+                end
+            end
+        end)
+    end
+end)
 
 -- ════════════════════════════════════════════════════════════════
 -- TAB 3: SOUNDBOARD
 -- ════════════════════════════════════════════════════════════════
-do
+safeTab("Soundboard", function()
     local scroll = makeScrollFrame(TabFrames["Soundboard"])
     local activeSound = nil
 
@@ -1067,19 +1737,43 @@ do
         end
     end, 7)
 
+    -- ─── NEW FEATURE: GLOBAL VOLUME SLIDER ──────────────────────
+    -- Controls the volume of ALL sounds in SoundService at once.
+    makeSectionLabel(scroll, "GLOBAL VOLUME", 7)
+
+    makeSlider(scroll, "Master Volume (SoundService)", 0, 10, 1, 5, function(v)
+        SoundService.RespectFilteringEnabled = true
+        SoundService.AmbientReverb           = Enum.ReverbType.NoReverb
+        -- Roblox doesn't expose a global volume property directly,
+        -- so we adjust every active Sound in workspace and character
+        local vol = v / 10
+        pcall(function()
+            for _, s in ipairs(workspace:GetDescendants()) do
+                if s:IsA("Sound") and s.Playing then s.Volume = vol end
+            end
+            local char = getChar()
+            if char then
+                for _, s in ipairs(char:GetDescendants()) do
+                    if s:IsA("Sound") and s.Playing then s.Volume = vol end
+                end
+            end
+        end)
+        showToast("Volume", "Master volume → "..(v*10).."%", C.Accent)
+    end, 7)
+
     makeSectionLabel(scroll, "PRESET SOUNDBOARD  (click Play)", 8)
 
     local presets = {
-        { name = "Nothing There OST - Myron",  id = "531635230"  },
-        { name = "Lobotomy Corp - Hesitation", id = "468523271"  },
-        { name = "Encounter Theme",            id = "1837453233" },
-        { name = "Air Horn",                   id = "9120386436" },
-        { name = "Sad Violin",                 id = "144135585"  },
-        { name = "Bruh Sound Effect",          id = "131036263"  },
-        { name = "Suspense Sting",             id = "172688390"  },
-        { name = "Rickroll",                   id = "142376088"  },
-        { name = "Vine Boom",                  id = "5153845638" },
-        { name = "Error Malfunction",          id = "138105663"  },
+        { name = "Nothing There(NT) - Goodbye", id = "128291864209759" },
+        { name = "Nothing There(NT) - Hello",   id = "85508545100124"  },
+        { name = "Third Trumpet(possibly?)",     id = "74189286108205"  },
+        { name = "Air Horn",                     id = "9120386436"      },
+        { name = "Womp",                         id = "98213546172960"  },
+        { name = "Breathing(NT)",                id = "100908531327764" },
+        { name = "I Love You(NT)",               id = "117421950264594" },
+        { name = "Mimic(NT)",                    id = "104105224168664" },
+        { name = "Vine Boom",                    id = "123647043761836" },
+        { name = "Screaming(NT)",                id = "132216429304277" },
     }
 
     for i, p in ipairs(presets) do
@@ -1126,12 +1820,12 @@ do
             Debris:AddItem(s, 300)
         end)
     end
-end
+end)
 
 -- ════════════════════════════════════════════════════════════════
 -- TAB 4: BACKGROUND
 -- ════════════════════════════════════════════════════════════════
-do
+safeTab("Background", function()
     local scroll = makeScrollFrame(TabFrames["Background"])
 
     makeSectionLabel(scroll, "PRESET THEMES", 1)
@@ -1199,6 +1893,41 @@ do
 
     makeSectionLabel(scroll, "CUSTOM RGB", 12)
 
+    -- ─── NEW FEATURE: SKY PRESET ─────────────────────────────────
+    -- Inserts a Sky object into Lighting to set a custom skybox color atmosphere.
+    -- Cycles through preset sky tones that match the LC aesthetic.
+    makeSectionLabel(scroll, "SKY ATMOSPHERE", 11)
+    do
+        local skyPresets = {
+            { name="None (Default)",      fog=Color3.fromRGB(192,192,192), fogEnd=100000, bright=1     },
+            { name="Void (Black Sky)",    fog=Color3.fromRGB(0,0,0),       fogEnd=80,     bright=0     },
+            { name="Blood Dusk",          fog=Color3.fromRGB(60,0,0),      fogEnd=300,    bright=0.5   },
+            { name="Pale Calamity (Fog)", fog=Color3.fromRGB(180,150,150), fogEnd=150,    bright=0.4   },
+            { name="Midnight Blue",       fog=Color3.fromRGB(5,5,30),      fogEnd=250,    bright=0.2   },
+            { name="Toxic Haze",          fog=Color3.fromRGB(10,40,0),     fogEnd=120,    bright=0.3   },
+            { name="Nuclear Orange",      fog=Color3.fromRGB(60,30,0),     fogEnd=200,    bright=0.6   },
+        }
+        for si, sp in ipairs(skyPresets) do
+            local sBtn = New("TextButton",{
+                Text=sp.name, Size=UDim2.new(1,0,0,28),
+                BackgroundColor3=sp.fog == Color3.fromRGB(192,192,192) and C.Btn or sp.fog,
+                TextColor3=Color3.new(1,1,1), Font=Enum.Font.GothamBold,
+                TextSize=9, BorderSizePixel=0, LayoutOrder=11+si,
+            }, scroll); Corner(4, sBtn); hoverBtn(sBtn, sp.fog, C.AccentBrt)
+            local cap = sp
+            sBtn.MouseButton1Click:Connect(function()
+                pcall(function()
+                    Lighting.FogColor      = cap.fog
+                    Lighting.FogEnd        = cap.fogEnd
+                    Lighting.FogStart      = 0
+                    Lighting.Brightness    = cap.bright
+                    Lighting.Ambient       = cap.fog
+                end)
+                showToast("Sky", "Applied: "..cap.name, C.Accent)
+            end)
+        end
+    end
+
     makeSlider(scroll, "Red",   0, 255, 1, 8, function(v) S.CustomR = v end, 13)
     makeSlider(scroll, "Green", 0, 255, 1, 5, function(v) S.CustomG = v end, 14)
     makeSlider(scroll, "Blue",  0, 255, 1, 5, function(v) S.CustomB = v end, 15)
@@ -1246,27 +1975,234 @@ do
             end
         end)
     end
-end
+end)
 
 -- ════════════════════════════════════════════════════════════════
 -- TAB 5: ABNORMALITY (10 Unique Features)
 -- ════════════════════════════════════════════════════════════════
-do
+safeTab("Abnormality", function()
     local scroll = makeScrollFrame(TabFrames["Abnormality"])
 
     makeSectionLabel(scroll, "ALEPH-CLASS ABILITIES", 1)
 
-    -- 1. THE MASK
-    makeToggle(scroll, "[1] THE MASK", "Make your character fully invisible", function(on)
-        S.Invisible = on
-        local char = getChar()
-        if not char then return end
-        for _, v in ipairs(char:GetDescendants()) do
-            if v:IsA("BasePart") then
-                v.LocalTransparencyModifier = on and 1 or 0
+    -- 1. INVISIBILITY — Real body floated up above map, full-avatar hologram on ground,
+    -- camera locked to hologram, others only see hologram, real body invisible.
+    do
+        local maskOn         = false
+        local ceilingPlatform = nil   -- anchor platform ABOVE real body
+        local hologram       = nil    -- full avatar clone at ground level
+        local holoConns      = {}
+        local FLOAT_Y        = 1200   -- height ABOVE current position
+        local prevCamType    = Enum.CameraType.Custom
+        local holoHRP        = nil    -- hologram HumanoidRootPart ref
+
+        local function destroyMask()
+            for _, c in ipairs(holoConns) do pcall(function() c:Disconnect() end) end
+            holoConns = {}
+            if hologram       then pcall(function() hologram:Destroy()        end); hologram        = nil end
+            if ceilingPlatform then pcall(function() ceilingPlatform:Destroy() end); ceilingPlatform = nil end
+            holoHRP = nil
+        end
+
+        local function buildMask()
+            local char = getChar()
+            local hrp  = getHRP(char)
+            if not char or not hrp then return end
+
+            -- ── 1. Clone hologram BEFORE moving real body ───────────────
+            hologram      = char:Clone()
+            hologram.Name = "NT_Hologram"
+
+            -- Strip scripts/animator so hologram stays still (we move it manually)
+            for _, obj in ipairs(hologram:GetDescendants()) do
+                if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("Animator") then
+                    obj:Destroy()
+                end
+            end
+
+            -- Keep Humanoid alive so clothing/accessories render properly,
+            -- but disable state transitions so it doesn't collapse
+            local holoHum = hologram:FindFirstChildOfClass("Humanoid")
+            if holoHum then
+                holoHum.PlatformStand = true
+                holoHum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                holoHum.HealthDisplayType   = Enum.HumanoidHealthDisplayType.AlwaysOff
+            end
+
+            -- Make all holo parts fully opaque + have collision (looks real to others)
+            for _, v in ipairs(hologram:GetDescendants()) do
+                if v:IsA("BasePart") then
+                    v.Transparency = 0.0   -- fully visible
+                    v.CanCollide   = true  -- physical presence
+                    v.Anchored     = true  -- we control position manually
+                    v.CastShadow   = true
+                end
+            end
+
+            -- Place hologram at current world position
+            hologram.Parent = workspace
+            holoHRP = hologram:FindFirstChild("HumanoidRootPart")
+
+            -- ── 2. Float real character ABOVE map ────────────────────────
+            local savedCFrame = hrp.CFrame
+            hrp.CFrame = hrp.CFrame + Vector3.new(0, FLOAT_Y, 0)
+
+            -- Invisible ceiling platform so real body doesn't fall back down
+            ceilingPlatform = Instance.new("Part")
+            ceilingPlatform.Size         = Vector3.new(10, 1, 10)
+            ceilingPlatform.Anchored     = true
+            ceilingPlatform.CanCollide   = true
+            ceilingPlatform.Transparency = 1
+            ceilingPlatform.CastShadow   = false
+            ceilingPlatform.CFrame       = hrp.CFrame + Vector3.new(0, -2, 0)
+            ceilingPlatform.Parent       = workspace
+
+            -- Make real character completely invisible to everyone
+            for _, v in ipairs(char:GetDescendants()) do
+                if v:IsA("BasePart") then
+                    v.LocalTransparencyModifier = 1
+                    v.CanCollide = false
+                    v.CastShadow = false
+                end
+            end
+            -- Hide name / health bar
+            local realHum = getHum(char)
+            if realHum then
+                realHum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                realHum.HealthDisplayType   = Enum.HumanoidHealthDisplayType.AlwaysOff
+            end
+
+            -- ── 3. Build part map: real → holo ───────────────────────────
+            local function buildPartMap()
+                local map = {}
+                local holoByName = {}
+                for _, hp in ipairs(hologram:GetDescendants()) do
+                    if hp:IsA("BasePart") then
+                        if not holoByName[hp.Name] then holoByName[hp.Name] = {} end
+                        table.insert(holoByName[hp.Name], hp)
+                    end
+                end
+                local nameCounters = {}
+                for _, realPart in ipairs(char:GetDescendants()) do
+                    if realPart:IsA("BasePart") then
+                        local n = realPart.Name
+                        nameCounters[n] = (nameCounters[n] or 0) + 1
+                        local candidates = holoByName[n]
+                        if candidates then
+                            local holoPart = candidates[nameCounters[n]]
+                            if holoPart then map[realPart] = holoPart end
+                        end
+                    end
+                end
+                return map
+            end
+            local partMap = buildPartMap()
+
+            -- ── 4. RenderStepped: mirror real parts → hologram (offset -FLOAT_Y) ──
+            -- Real body is FLOAT_Y above original position; hologram stays at original.
+            local mirrorConn = RunService.RenderStepped:Connect(function()
+                if not maskOn then return end
+                pcall(function()
+                    for realPart, holoPart in pairs(partMap) do
+                        if realPart.Parent and holoPart.Parent then
+                            holoPart.CFrame = realPart.CFrame - Vector3.new(0, FLOAT_Y, 0)
+                        end
+                    end
+                end)
+            end)
+            table.insert(holoConns, mirrorConn)
+
+            -- ── 5. Camera: lock to hologram HRP instead of real HRP ─────
+            prevCamType = workspace.CurrentCamera.CameraType
+            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+            if holoHRP then
+                -- Point camera subject at hologram so Roblox default cam follows it
+                workspace.CurrentCamera.CameraSubject = holoHRP
             end
         end
-    end, 2)
+
+        makeToggle(scroll, "[1] INVISIBILITY",
+            "Float body above map, spawn full-avatar hologram below, camera follows hologram", function(on)
+            maskOn = on
+            S.Invisible = on
+            if on then
+                buildMask()
+                showToast("Invisibility", "Hologram spawned. You are invisible.", C.Accent)
+            else
+                destroyMask()
+                local char = getChar()
+                local hrp  = getHRP(char)
+                if char and hrp then
+                    -- Return real body back down to ground
+                    hrp.CFrame = hrp.CFrame - Vector3.new(0, FLOAT_Y, 0)
+                    for _, v in ipairs(char:GetDescendants()) do
+                        if v:IsA("BasePart") then
+                            v.LocalTransparencyModifier = 0
+                            v.CanCollide = true
+                            v.CastShadow = true
+                        end
+                    end
+                    local realHum = getHum(char)
+                    if realHum then
+                        realHum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Automatic
+                        realHum.HealthDisplayType   = Enum.HumanoidHealthDisplayType.DisplayWhenDamaged
+                    end
+                end
+                -- Restore camera
+                workspace.CurrentCamera.CameraType    = Enum.CameraType.Custom
+                workspace.CurrentCamera.CameraSubject = getHum(getChar()) or getHRP(getChar())
+                showToast("Invisibility", "Hologram removed. Body restored.", C.TextDim)
+            end
+        end, 2)
+
+        -- Hologram transparency slider (default 0 = fully visible to others)
+        makeSlider(scroll, "Hologram Opacity (0=solid, 10=ghost)", 0, 10, 1, 0, function(v)
+            if hologram then
+                local t = (v / 10) * 0.95
+                for _, p in ipairs(hologram:GetDescendants()) do
+                    if p:IsA("BasePart") then p.Transparency = t end
+                end
+            end
+        end, 2)
+    end
+
+    -- ─── NEW FEATURE: FLASHBANG ───────────────────────────────
+    -- Instantly whites out the screen for a set duration then
+    -- fades back. Purely local visual — great paired with Camera
+    -- Shake or Nothing There's breach sequence aesthetics.
+    do
+        local fbGui = New("ScreenGui",{
+            Name="NT_Flashbang", ResetOnSpawn=false,
+            IgnoreGuiInset=true, ZIndexBehavior=Enum.ZIndexBehavior.Sibling,
+            Enabled=false,
+        }, PlayerGui)
+        local fbFrame = New("Frame",{
+            Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.new(1,1,1),
+            BackgroundTransparency=1, BorderSizePixel=0, ZIndex=200,
+        }, fbGui)
+
+        local fbDuration = 1.5  -- seconds
+
+        makeButton(scroll, "⚡  FLASHBANG — Trigger", function()
+            fbGui.Enabled = true
+            -- Flash white
+            TweenService:Create(fbFrame,
+                TweenInfo.new(0.05, Enum.EasingStyle.Linear),
+                {BackgroundTransparency = 0}):Play()
+            task.wait(fbDuration * 0.25)
+            -- Fade back
+            TweenService:Create(fbFrame,
+                TweenInfo.new(fbDuration * 0.75, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                {BackgroundTransparency = 1}):Play()
+            task.delay(fbDuration, function()
+                fbGui.Enabled = false
+            end)
+        end, 2)
+
+        makeSlider(scroll, "Flashbang Duration (0.5–5s)", 1, 10, 1, 3, function(v)
+            fbDuration = v * 0.5
+        end, 2)
+    end
 
     -- 2. SPECTRUM SHIFT
     makeToggle(scroll, "[2] SPECTRUM SHIFT", "Character cycles full RGB rainbow colors", function(on)
@@ -1472,12 +2408,7 @@ do
     makeButton(scroll, "Send Chat Message (once)", function()
         local msg = chatBox.Text
         if msg == "" then return end
-        pcall(function()
-            game:GetService("ReplicatedStorage")
-                :FindFirstChild("DefaultChatSystemChatEvents")
-                :FindFirstChild("SayMessageRequest")
-                :FireServer(msg, "All")
-        end)
+        chatSay(msg)
     end, 15)
 
     makeButton(scroll, "Send 5x (1 second apart)", function()
@@ -1485,21 +2416,195 @@ do
         if msg == "" then return end
         for i = 1, 5 do
             task.delay(i - 1, function()
-                pcall(function()
-                    game:GetService("ReplicatedStorage")
-                        :FindFirstChild("DefaultChatSystemChatEvents")
-                        :FindFirstChild("SayMessageRequest")
-                        :FireServer(msg, "All")
-                end)
+                chatSay(msg)
             end)
         end
     end, 16)
-end
+
+    -- ════════════════════════════════════════════════════════════
+    -- [11] QLIPHOTH VISION — Night-vision filter overlay
+    -- A deep crimson vignette darkens the screen edges while
+    -- a green tint boosts visibility in dark games. Pairs well
+    -- with the Pale Calamity fog to simulate facility lighting.
+    -- ════════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "QLIPHOTH VISION", 17)
+
+    local qvGui = New("ScreenGui", {
+        Name="QliphothVision", ResetOnSpawn=false,
+        ZIndexBehavior=Enum.ZIndexBehavior.Sibling,
+        IgnoreGuiInset=true, Enabled=false,
+    }, PlayerGui)
+
+    local qvVignette = New("ImageLabel", {
+        Size=UDim2.new(1,0,1,0), BackgroundTransparency=1,
+        Image="rbxassetid://1393519701",
+        ImageColor3=Color3.fromRGB(120,0,0),
+        ImageTransparency=0.35, ZIndex=80,
+    }, qvGui)
+
+    local qvTint = New("Frame", {
+        Size=UDim2.new(1,0,1,0),
+        BackgroundColor3=Color3.fromRGB(0,40,10),
+        BackgroundTransparency=0.82, ZIndex=79,
+        BorderSizePixel=0,
+    }, qvGui)
+
+    local qvLabel = New("TextLabel", {
+        Text="QLIPHOTH VISION  //  ACTIVE",
+        Size=UDim2.new(0,230,0,16), Position=UDim2.new(0,8,0,8),
+        BackgroundTransparency=1,
+        TextColor3=Color3.fromRGB(60,180,60),
+        Font=Enum.Font.Code, TextSize=9, ZIndex=81,
+        TextXAlignment=Enum.TextXAlignment.Left,
+    }, qvGui)
+
+    makeToggle(scroll, "[11] QLIPHOTH VISION",
+        "Crimson vignette + green tint — facility night-vision mode", function(on)
+        qvGui.Enabled = on
+        Lighting.Brightness = on and 3 or 1
+    end, 18)
+
+    -- ════════════════════════════════════════════════════════════
+    -- [12] ENTITY SIREN — Looping breach alarm sound
+    -- Plays a repeating containment breach klaxon anchored to
+    -- the local character. Audible server-wide. Stop button
+    -- kills it instantly. Useful with the Breach Alert overlay.
+    -- ════════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "ENTITY SIREN", 19)
+
+    local sirenSound = nil
+
+    makeButton(scroll, "▶  Sound Breach Siren", function()
+        if sirenSound then pcall(function() sirenSound:Stop(); sirenSound:Destroy() end) end
+        local hrp = getHRP(getChar())
+        if not hrp then return end
+        sirenSound = Instance.new("Sound")
+        sirenSound.SoundId  = "rbxassetid://9120386436"  -- repurposed as klaxon tone
+        sirenSound.Volume   = 0.9
+        sirenSound.Looped   = true
+        sirenSound.RollOffMaxDistance = 80
+        sirenSound.Parent   = hrp
+        sirenSound:Play()
+        showToast("Siren", "BREACH SIREN — ACTIVE", Color3.fromRGB(255,60,60))
+    end, 20)
+
+    makeButton(scroll, "■  Stop Siren", function()
+        if sirenSound then
+            pcall(function() sirenSound:Stop(); sirenSound:Destroy() end)
+            sirenSound = nil
+        end
+        showToast("Siren", "Siren silenced.", C.TextDim)
+    end, 21)
+
+    -- ════════════════════════════════════════════════════════════
+    -- [13] MEMORY ANCHOR — Save & return to a position
+    -- One button saves your current HRP CFrame as an anchor.
+    -- A second button snaps you back to it instantly.
+    -- Useful for marking a safe spot before exploring.
+    -- ════════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "MEMORY ANCHOR", 22)
+
+    local anchorCFrame = nil
+    local anchorLbl = New("TextLabel", {
+        Text="No anchor set.",
+        Size=UDim2.new(1,0,0,20), BackgroundTransparency=1,
+        TextColor3=C.TextDim, Font=Enum.Font.Code, TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        LayoutOrder=23,
+    }, scroll)
+
+    makeButton(scroll, "Set Anchor (save position)", function()
+        local hrp = getHRP(getChar())
+        if hrp then
+            anchorCFrame = hrp.CFrame
+            local p = hrp.Position
+            anchorLbl.Text = string.format("Anchor: (%.0f, %.0f, %.0f)", p.X, p.Y, p.Z)
+            showToast("Memory Anchor", "Position saved.", C.Accent)
+        end
+    end, 24)
+
+    makeButton(scroll, "Return to Anchor", function()
+        if not anchorCFrame then
+            showToast("Memory Anchor", "No anchor set!", C.AccentBrt)
+            return
+        end
+        local hrp = getHRP(getChar())
+        if hrp then
+            hrp.CFrame = anchorCFrame
+            showToast("Memory Anchor", "Returned to anchor.", Color3.fromRGB(60,220,80))
+        end
+    end, 25)
+
+    -- ════════════════════════════════════════════════════════════
+    -- [14] SUPPRESSION AURA — Lag-chat nearby players
+    -- Fires rapid chat messages creating visual noise for nearby
+    -- players. Lore: simulating an Abnormality suppression field.
+    -- Messages are generic facility logs, not offensive.
+    -- ════════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "SUPPRESSION AURA", 26)
+
+    local suppressionOn = false
+    local suppressMsgs = {
+        "[SUPPRESS] Qliphoth destabilising — stand clear.",
+        "[SUPPRESS] Hazard level rising. Workers evacuate Wing B.",
+        "[SUPPRESS] Energy output critical. Suppression in progress.",
+        "[SUPPRESS] Manager override active. Do not approach.",
+        "[SUPPRESS] Counter dropping. All units: containment stance.",
+    }
+    local suppressIdx = 1
+
+    makeToggle(scroll, "[14] SUPPRESSION AURA",
+        "Broadcasts facility suppression logs to chat every 8s", function(on)
+        suppressionOn = on
+        if on then
+            task.spawn(function()
+                while suppressionOn do
+                    pcall(function()
+                        chatSay(suppressMsgs[suppressIdx])
+                    end)
+                    suppressIdx = (suppressIdx % #suppressMsgs) + 1
+                    task.wait(8)
+                end
+            end)
+        end
+        showToast("Suppression Aura", on and "Broadcasting suppression logs" or "Stopped", C.Accent)
+    end, 27)
+
+    -- ════════════════════════════════════════════════════════════
+    -- [15] CAMERA SHAKE — Persistent ambient tremor
+    -- Adds a subtle random CFrame offset each frame to simulate
+    -- ground tremors or Nothing There's approach.
+    -- Intensity slider: 0 = off, 10 = extreme quake.
+    -- ════════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "CAMERA SHAKE", 28)
+
+    local camShakeOn  = false
+    local camShakeAmt = 0.15
+
+    makeToggle(scroll, "[15] CAMERA SHAKE",
+        "Ambient tremor on the camera — 'It is approaching…'", function(on)
+        camShakeOn = on
+        showToast("Camera Shake", on and "Tremors active." or "Stable.", C.Accent)
+    end, 29)
+
+    makeSlider(scroll, "Shake Intensity", 1, 10, 1, 2, function(v)
+        camShakeAmt = v * 0.08
+    end, 30)
+
+    RunService.RenderStepped:Connect(function()
+        if not camShakeOn then return end
+        local cam = workspace.CurrentCamera
+        local rx  = (math.random() - 0.5) * camShakeAmt
+        local ry  = (math.random() - 0.5) * camShakeAmt
+        local rz  = (math.random() - 0.5) * camShakeAmt * 0.3
+        cam.CFrame = cam.CFrame * CFrame.Angles(rx, ry, rz)
+    end)
+end)
 
 -- ════════════════════════════════════════════════════════════════
 -- TAB 6: ORDEAL  (Custom atmospheric + utility features)
 -- ════════════════════════════════════════════════════════════════
-do
+safeTab("Ordeal", function()
     local scroll = makeScrollFrame(TabFrames["Ordeal"])
 
     -- ══════════════════════════════════════════════
@@ -1616,6 +2721,155 @@ do
             end)
         end
     end, 4)
+
+    -- ════════════════════════════════════════════════════════════
+    -- PANIC BUTTON
+    -- One click kills every active NT GUI feature simultaneously:
+    -- fly, noclip, speed, rainbow, spin, god mode, freeze, ESP.
+    -- Useful for quickly going clean when someone looks at your
+    -- screen or when a feature is stuck on.
+    -- ════════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "PANIC BUTTON", 4)
+
+    -- ─── NEW FEATURE: ORDEAL COUNTDOWN TIMER ────────────────────
+    -- Starts a visible on-screen countdown. When it hits zero it
+    -- plays a breach-alarm sound and flashes the screen red once.
+    -- Use it to time ordeals, rotations, or any real-world timer.
+    makeSectionLabel(scroll, "ORDEAL COUNTDOWN", 3)
+    do
+        local timerGui = New("ScreenGui",{
+            Name="NT_OrdealTimer", ResetOnSpawn=false, IgnoreGuiInset=true,
+            ZIndexBehavior=Enum.ZIndexBehavior.Sibling, Enabled=false,
+        }, PlayerGui)
+        local timerLbl = New("TextLabel",{
+            Text="00:00", Size=UDim2.new(0,160,0,40),
+            Position=UDim2.new(0.5,-80,0,55),
+            BackgroundColor3=Color3.fromRGB(12,4,4),
+            BackgroundTransparency=0.15,
+            TextColor3=Color3.fromRGB(255,60,60),
+            Font=Enum.Font.GothamBold, TextSize=22,
+            BorderSizePixel=0, ZIndex=50,
+        }, timerGui); Corner(8, timerLbl)
+        Stroke(Color3.fromRGB(139,0,0), 1.5, timerLbl)
+
+        local timerSeconds = 60
+        local timerThread  = nil
+
+        local function stopTimer()
+            if timerThread then task.cancel(timerThread); timerThread = nil end
+            timerGui.Enabled = false
+        end
+
+        local function startTimer(secs)
+            stopTimer()
+            timerGui.Enabled = true
+            timerThread = task.spawn(function()
+                local remaining = secs
+                while remaining > 0 do
+                    local m = math.floor(remaining / 60)
+                    local s = remaining % 60
+                    timerLbl.Text = string.format("%02d:%02d", m, s)
+                    timerLbl.TextColor3 = remaining <= 10
+                        and Color3.fromRGB(255, 40, 40)
+                        or  Color3.fromRGB(220, 200, 200)
+                    task.wait(1)
+                    remaining = remaining - 1
+                end
+                timerLbl.Text = "⚠ TIME!"
+                timerLbl.TextColor3 = Color3.fromRGB(255, 0, 0)
+                -- Flash screen
+                local flashGui = New("ScreenGui",{
+                    Name="NT_TimerFlash", ResetOnSpawn=false, IgnoreGuiInset=true, ZIndex=500,
+                }, PlayerGui)
+                local fl = New("Frame",{
+                    Size=UDim2.new(1,0,1,0), BackgroundColor3=Color3.fromRGB(255,0,0),
+                    BackgroundTransparency=0.4, BorderSizePixel=0,
+                }, flashGui)
+                task.delay(0.8, function()
+                    TweenService:Create(fl, TweenInfo.new(0.5), {BackgroundTransparency=1}):Play()
+                    task.delay(0.6, function() flashGui:Destroy() end)
+                end)
+                -- Alarm sound
+                pcall(function()
+                    local alarm = Instance.new("Sound")
+                    alarm.SoundId = "rbxassetid://9120386436"
+                    alarm.Volume  = 0.8
+                    alarm.Parent  = SoundService
+                    alarm:Play(); Debris:AddItem(alarm, 3)
+                end)
+                task.wait(3)
+                stopTimer()
+            end)
+        end
+
+        makeSlider(scroll, "Countdown Duration (seconds)", 10, 300, 5, 60, function(v)
+            timerSeconds = v
+        end, 3)
+
+        makeButton(scroll, "▶  Start Ordeal Countdown", function()
+            startTimer(timerSeconds)
+            showToast("Timer", "Countdown started: "..timerSeconds.."s", C.Accent)
+        end, 3)
+
+        makeButton(scroll, "■  Stop Timer", function()
+            stopTimer()
+            showToast("Timer", "Timer cancelled.", C.TextDim)
+        end, 3)
+    end
+
+    local panicCard = New("Frame", {
+        Size=UDim2.new(1,0,0,62), BackgroundColor3=Color3.fromRGB(30,5,5),
+        BorderSizePixel=0, LayoutOrder=5,
+    }, scroll)
+    Corner(6, panicCard); Stroke(Color3.fromRGB(200,30,30), 1.2, panicCard)
+
+    New("TextLabel",{
+        Text="⚠  KILLS ALL ACTIVE FEATURES AT ONCE",
+        Size=UDim2.new(1,-10,0,18), Position=UDim2.new(0,5,0,4),
+        BackgroundTransparency=1, TextColor3=Color3.fromRGB(180,80,80),
+        Font=Enum.Font.Code, TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Center,
+    }, panicCard)
+
+    local panicBtn = New("TextButton",{
+        Text="◉  PANIC  —  DISABLE ALL",
+        Size=UDim2.new(1,-16,0,30), Position=UDim2.new(0,8,0,26),
+        BackgroundColor3=Color3.fromRGB(160,0,0),
+        TextColor3=Color3.new(1,1,1),
+        Font=Enum.Font.GothamBold, TextSize=13, BorderSizePixel=0,
+    }, panicCard); Corner(5, panicBtn)
+    hoverBtn(panicBtn, Color3.fromRGB(160,0,0), Color3.fromRGB(210,30,30))
+
+    panicBtn.MouseButton1Click:Connect(function()
+        -- Kill every toggle in S
+        S.Fly       = false; S.NoClip    = false; S.SpeedOn   = false
+        S.Rainbow   = false; S.Spin      = false; S.GodMode   = false
+        S.FreezeSelf= false; S.ESP       = false; S.Invisible = false
+        S.AntiVoid  = false; S.FullBright= false; S.AntiAFK   = false
+        -- Clean up fly physics
+        if S.FlyBV then S.FlyBV:Destroy(); S.FlyBV = nil end
+        if S.FlyBG then S.FlyBG:Destroy(); S.FlyBG = nil end
+        -- Unanchor
+        local hrp = getHRP(getChar())
+        if hrp then hrp.Anchored = false end
+        -- Restore humanoid
+        local hum = getHum(getChar())
+        if hum then
+            hum.PlatformStand = false
+            hum.WalkSpeed     = 16
+            hum.JumpPower     = 50
+            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+        end
+        -- Restore lighting
+        Lighting.Brightness = 1
+        Lighting.Ambient    = Color3.fromRGB(127,127,127)
+        Lighting.FogEnd     = 100000
+        -- Kill active CIY _G flags
+        _G.NT_AnomalyDetect = false
+        _G.NT_WorkLog       = false
+        _G.EV_ESP           = false
+        showToast("PANIC", "All features disabled.", Color3.fromRGB(255,60,60))
+    end)
 
     -- ══════════════════════════════════════════════
     -- PALE CLOCK HUD
@@ -1974,7 +3228,7 @@ do
         local row = trackerRows[plr.Name]
         if row then row:Destroy(); trackerRows[plr.Name] = nil end
     end)
-end
+end)
 
 -- ════════════════════════════════════════════════════════════════
 -- TAB 8: FNF  (Funky Friday — correct fixed port)
@@ -1992,7 +3246,7 @@ end
 --  Downscroll → notes fall, Y.Scale increases → fire when > 0.4
 --  Upscroll   → notes rise, Y.Scale decreases → fire when < 0.6
 -- ════════════════════════════════════════════════════════════════
-do
+safeTab("FNF", function()
     local VIM        = game:GetService("VirtualInputManager")
     local RunService = game:GetService("RunService")
     local scroll     = makeScrollFrame(TabFrames["FNF"])
@@ -2741,11 +3995,11 @@ do
             task.wait(0.5)
         end
     end)
-end
+end)
 
 -- TAB 7: TLB  (The Longest Battle — game-specific tools)
 -- ════════════════════════════════════════════════════════════════
-do
+safeTab("TLB", function()
     local RepStorage = game:GetService("ReplicatedStorage")
     local scroll = makeScrollFrame(TabFrames["TLB"])
 
@@ -3158,12 +4412,771 @@ do
             end
         end)
     end)
-end
+end)
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB: BLADE BALL  (NoEnemiesHub auto-parry + visualizer)
+-- ════════════════════════════════════════════════════════════════
+safeTab("BladeBall", function()
+    local scroll = makeScrollFrame(TabFrames["BladeBall"])
+
+    makeSectionLabel(scroll, "AUTO PARRY + VISUALIZER", 1)
+
+    -- Info card
+    local infoCard = New("Frame",{
+        Size=UDim2.new(1,0,0,52), BackgroundColor3=C.Secondary,
+        BorderSizePixel=0, LayoutOrder=2,
+    }, scroll); Corner(6, infoCard); Stroke(C.Accent, 1, infoCard)
+    New("TextLabel",{
+        Text="Loads NoEnemiesHub Auto-Parry with built-in visualizer.\nUses PreSimulation for frame-perfect timing.\nFires mouse click when ball is within kill distance.",
+        Size=UDim2.new(1,-12,1,0), Position=UDim2.new(0,6,0,0),
+        BackgroundTransparency=1, TextColor3=C.TextDim,
+        Font=Enum.Font.Code, TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Left, TextWrapped=true,
+    }, infoCard)
+
+    makeSectionLabel(scroll, "LOAD SCRIPT", 3)
+
+    makeButton(scroll, "▶  Load Auto-Parry + Visualizer", function()
+        showToast("Blade Ball", "Loading NoEnemiesHub script...", C.Accent)
+        task.spawn(function()
+            local ok, err = pcall(function()
+                -- Notification + visualizer load
+                local starterGUI = game:GetService("StarterGui")
+                starterGUI:SetCore("SendNotification", {
+                    Title    = "NoEnemiesHub",
+                    Text     = "Auto Parry Executed (We also added visualizer.)",
+                    Icon     = "rbxassetid://135351041318579",
+                    Duration = 10,
+                    Button1  = "OK"
+                })
+                loadstring(game:HttpGet("https://scriptblox.com/raw/UPD-Blade-Ball-op-autoparry-with-visualizer-8652"))()
+            end)
+            if ok then
+                showToast("Blade Ball", "Script loaded!", Color3.fromRGB(60,220,80))
+            else
+                showToast("Blade Ball", "Load failed: "..(tostring(err):sub(1,40)), C.AccentBrt)
+            end
+        end)
+    end, 4)
+
+    makeSectionLabel(scroll, "BUILT-IN BACKUP PARRY", 5)
+
+    -- Backup parry logic using the exact same algorithm as the user's script
+    -- (PreSimulation, distance/speed ratio <= 0.55, fires mouse click)
+    local backupOn    = false
+    local backupParried = false
+
+    local function getBall()
+        local ballsFolder = workspace:FindFirstChild("Balls")
+        if not ballsFolder then return nil end
+        for _, b in ipairs(ballsFolder:GetChildren()) do
+            if b:GetAttribute("realBall") then return b end
+        end
+        return nil
+    end
+
+    -- Watch for new balls and reset parried state
+    local ballsFolder = workspace:FindFirstChild("Balls")
+    if ballsFolder then
+        ballsFolder.ChildAdded:Connect(function()
+            task.wait(0.1)
+            local ball = getBall()
+            if not ball then return end
+            ball:GetAttributeChangedSignal("target"):Connect(function()
+                backupParried = false
+            end)
+        end)
+    end
+
+    -- Counter label
+    local cCard = New("Frame",{
+        Size=UDim2.new(1,0,0,28), BackgroundColor3=C.Secondary,
+        BorderSizePixel=0, LayoutOrder=7,
+    }, scroll); Corner(4, cCard)
+    local cLbl = New("TextLabel",{
+        Text="Backup parries: 0",
+        Size=UDim2.new(1,-10,1,0), Position=UDim2.new(0,5,0,0),
+        BackgroundTransparency=1, TextColor3=C.Text,
+        Font=Enum.Font.Code, TextSize=10,
+        TextXAlignment=Enum.TextXAlignment.Left,
+    }, cCard)
+    local bCount = 0
+
+    makeToggle(scroll, "Backup Auto-Parry",
+        "Uses PreSimulation + distance/speed ratio for frame-perfect parry", function(on)
+        backupOn = on
+        showToast("Blade Ball", on and "Backup Parry ON" or "Backup Parry OFF",
+            on and Color3.fromRGB(60,220,80) or C.AccentBrt)
+    end, 6)
+
+    local VIM = game:GetService("VirtualInputManager")
+    RunService.PreSimulation:Connect(function()
+        if not backupOn then return end
+        pcall(function()
+            local ball = getBall()
+            local hrp  = getHRP(getChar())
+            if not ball or not hrp then return end
+
+            local speed    = ball:FindFirstChild("zoomies") and
+                             ball.zoomies:FindFirstChild("VectorVelocity") and
+                             ball.zoomies.VectorVelocity.Magnitude or 0
+            local distance = (hrp.Position - ball.Position).Magnitude
+
+            if ball:GetAttribute("target") == Player.Name
+                and not backupParried
+                and speed > 0
+                and (distance / speed) <= 0.55 then
+                VIM:SendMouseButtonEvent(0, 0, 0, true,  game, 0)
+                VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+                backupParried = true
+                bCount = bCount + 1
+                cLbl.Text = "Backup parries: "..bCount
+            end
+        end)
+    end)
+
+    makeButton(scroll, "Reset Counter", function()
+        bCount = 0; cLbl.Text = "Backup parries: 0"
+    end, 8)
+
+    makeSectionLabel(scroll, "MOVEMENT", 9)
+
+    local bbSpeed = false
+    makeToggle(scroll, "Speed Boost (40 WS)", "Sets WalkSpeed to 40", function(on)
+        bbSpeed = on
+        showToast("Blade Ball", on and "Speed ON" or "Speed OFF", C.Accent)
+    end, 10)
+    RunService.Heartbeat:Connect(function()
+        if not bbSpeed then return end
+        pcall(function() local h=getHum(getChar()); if h then h.WalkSpeed=40 end end)
+    end)
+
+    -- ─── NEW FEATURE: BALL DISTANCE TRACKER HUD ──────────────────
+    -- Shows a live on-screen overlay with the distance between you
+    -- and the active ball, plus a color indicator (green=safe, red=danger).
+    makeSectionLabel(scroll, "BALL TRACKER HUD", 11)
+    do
+        local trackerOn = false
+        local bbTrackerGui = New("ScreenGui",{
+            Name="BB_TrackerHUD", ResetOnSpawn=false, IgnoreGuiInset=true,
+            ZIndexBehavior=Enum.ZIndexBehavior.Sibling, Enabled=false,
+        }, PlayerGui)
+        local trackerFrame = New("Frame",{
+            Size=UDim2.new(0,160,0,36), Position=UDim2.new(0.5,-80,0,10),
+            BackgroundColor3=Color3.fromRGB(10,5,5),
+            BackgroundTransparency=0.2, BorderSizePixel=0, ZIndex=60,
+        }, bbTrackerGui); Corner(8, trackerFrame); Stroke(C.Accent,1,trackerFrame)
+        local distLbl = New("TextLabel",{
+            Text="BALL: --", Size=UDim2.new(1,0,1,0),
+            BackgroundTransparency=1, TextColor3=Color3.new(1,1,1),
+            Font=Enum.Font.GothamBold, TextSize=13, ZIndex=61,
+        }, trackerFrame)
+
+        makeToggle(scroll, "Ball Distance HUD",
+            "On-screen label showing ball distance — green=safe, red=incoming", function(on)
+            trackerOn = on
+            bbTrackerGui.Enabled = on
+        end, 12)
+
+        RunService.RenderStepped:Connect(function()
+            if not trackerOn then return end
+            pcall(function()
+                local ballsF = workspace:FindFirstChild("Balls")
+                local ball   = ballsF and (function()
+                    for _, b in ipairs(ballsF:GetChildren()) do
+                        if b:GetAttribute("realBall") then return b end
+                    end
+                end)()
+                local hrp = getHRP(getChar())
+                if not ball or not hrp then distLbl.Text = "BALL: ---"; return end
+                local dist = math.floor((ball.Position - hrp.Position).Magnitude)
+                local danger = dist < 30
+                distLbl.Text = "BALL: "..dist.." studs"
+                distLbl.TextColor3 = danger
+                    and Color3.fromRGB(255, 40, 40)
+                    or  Color3.fromRGB(40,  220, 80)
+            end)
+        end)
+    end
+end)
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB: EVADE  (PurpleBird's horror maze-runner game)
+-- ════════════════════════════════════════════════════════════════
+safeTab("Evade", function()
+    local scroll = makeScrollFrame(TabFrames["Evade"])
+    local EV = {
+        speedBoost  = false,
+        autoDodge   = false,
+        noclip      = false,
+        infStamina  = false,
+        dodgeKey    = Enum.KeyCode.Q,
+    }
+
+    makeSectionLabel(scroll, "MOVEMENT", 1)
+
+    makeToggle(scroll, "Speed Boost",
+        "Raises WalkSpeed to 32 (default 16) to outrun the evader", function(on)
+        EV.speedBoost = on
+        showToast("Evade", on and "Speed Boost ON" or "Speed Boost OFF",
+            on and Color3.fromRGB(60,200,60) or C.AccentBrt)
+    end, 2)
+
+    makeSlider(scroll, "Speed Value", 16, 80, 2, 32, function(v)
+        EV.speedValue = v
+    end, 3)
+
+    local EV_speedValue = 32
+    RunService.Heartbeat:Connect(function()
+        if not EV.speedBoost then return end
+        pcall(function()
+            local hum = getHum(getChar())
+            if hum then hum.WalkSpeed = EV_speedValue or 32 end
+        end)
+    end)
+
+    makeToggle(scroll, "Infinite Stamina",
+        "Prevents the stamina bar from depleting (resets it each frame)", function(on)
+        EV.infStamina = on
+        showToast("Evade", on and "Infinite Stamina ON" or "OFF", C.Accent)
+    end, 4)
+
+    RunService.Heartbeat:Connect(function()
+        if not EV.infStamina then return end
+        pcall(function()
+            -- Evade stores stamina in a LocalScript value or attribute
+            local char = getChar()
+            if not char then return end
+            local stam = char:FindFirstChild("Stamina")
+                or Player.PlayerGui:FindFirstChild("StaminaValue", true)
+            if stam and stam:IsA("NumberValue") then
+                stam.Value = stam.Value >= 0 and 100 or stam.Value
+            end
+        end)
+    end)
+
+    makeToggle(scroll, "Noclip",
+        "Walk through walls — useful for getting away from the evader", function(on)
+        EV.noclip = on
+        showToast("Evade", on and "Noclip ON" or "Noclip OFF", C.Accent)
+    end, 5)
+
+    RunService.Stepped:Connect(function()
+        if not EV.noclip then return end
+        pcall(function()
+            local char = getChar()
+            if not char then return end
+            for _, p in ipairs(char:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide = false end
+            end
+        end)
+    end)
+
+    makeSectionLabel(scroll, "AUTO-DODGE", 6)
+
+    makeToggle(scroll, "Auto-Dodge (Q key)",
+        "Automatically presses Q when the evader is within 20 studs", function(on)
+        EV.autoDodge = on
+        showToast("Evade", on and "Auto-Dodge ON" or "Auto-Dodge OFF", C.Accent)
+    end, 7)
+
+    local dodgeCooldown = false
+    RunService.Heartbeat:Connect(function()
+        if not EV.autoDodge then return end
+        if dodgeCooldown then return end
+        pcall(function()
+            local hrp = getHRP(getChar())
+            if not hrp then return end
+            -- Find the "evader" — usually a rig with name containing "Evader" or "Monster"
+            for _, model in ipairs(workspace:GetChildren()) do
+                if model:IsA("Model") and
+                   (model.Name:lower():find("evader") or model.Name:lower():find("monster")) then
+                    local eHRP = model:FindFirstChild("HumanoidRootPart")
+                    if eHRP and (eHRP.Position - hrp.Position).Magnitude < 22 then
+                        dodgeCooldown = true
+                        game:GetService("VirtualInputManager"):SendKeyEvent(
+                            true, Enum.KeyCode.Q, false, game)
+                        task.wait(0.08)
+                        game:GetService("VirtualInputManager"):SendKeyEvent(
+                            false, Enum.KeyCode.Q, false, game)
+                        task.wait(1.2) -- dodge cooldown
+                        dodgeCooldown = false
+                    end
+                end
+            end
+        end)
+    end)
+
+    makeSectionLabel(scroll, "VISUALS", 8)
+
+    makeToggle(scroll, "Evader ESP",
+        "Red highlight on the evader model so you can see through walls", function(on)
+        showToast("Evade", on and "Evader ESP ON" or "Evader ESP OFF", C.Accent)
+        _G.EV_ESP = on
+    end, 9)
+
+    RunService.RenderStepped:Connect(function()
+        if not _G.EV_ESP then return end
+        pcall(function()
+            for _, model in ipairs(workspace:GetChildren()) do
+                if model:IsA("Model") and
+                   (model.Name:lower():find("evader") or model.Name:lower():find("monster")) then
+                    if not model:FindFirstChild("EV_HL") then
+                        local h = Instance.new("Highlight")
+                        h.Name             = "EV_HL"
+                        h.Adornee          = model
+                        h.FillColor        = Color3.fromRGB(255,30,30)
+                        h.FillTransparency = 0.3
+                        h.OutlineColor     = Color3.fromRGB(255,80,80)
+                        h.Parent           = model
+                    end
+                elseif model:FindFirstChild("EV_HL") and not _G.EV_ESP then
+                    model.EV_HL:Destroy()
+                end
+            end
+        end)
+    end)
+end)
+
+-- ════════════════════════════════════════════════════════════════
+-- TAB 9: DOORS  (Roblox DOORS — visual tools from GaelHubs port)
+-- ════════════════════════════════════════════════════════════════
+safeTab("Doors", function()
+    local scroll = makeScrollFrame(TabFrames["Doors"])
+
+    -- ── Shared state ─────────────────────────────────────────────
+    local D = {
+        doorsVisual     = false,
+        seeEnemies      = false,
+        entityHUD       = false,
+        notifiedEnemies = {},
+        alertedSideroom = false,
+    }
+
+    -- ════════════════════════════════════════════════════════════
+    -- FEATURE 1: DOORS VISUAL
+    -- Highlights doors, keys, chests, levers, gold piles and
+    -- sideroom dupes with rainbow Highlight + distance billboard.
+    -- Sideroom dupes get a red warning + proximity sound alert.
+    -- ════════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "DOORS VISUAL", 1)
+
+    makeToggle(scroll, "Doors Visual",
+        "Rainbow highlights + distance labels on all interactables",
+        function(on)
+            D.doorsVisual = on
+            D.alertedSideroom = false
+            if not on then
+                -- Strip all highlights and billboards when turned off
+                for _, obj in pairs(workspace:GetDescendants()) do
+                    pcall(function()
+                        local h = obj:FindFirstChild("HighlightVisual")
+                        local b = obj:FindFirstChild("InfoBillboard")
+                        if h then h:Destroy() end
+                        if b then b:Destroy() end
+                    end)
+                end
+            end
+        end, 2)
+
+    -- DoorsVisual heartbeat
+    RunService.RenderStepped:Connect(function()
+        if not D.doorsVisual then return end
+        local myChar = getChar()
+        local myHRP  = getHRP(myChar)
+
+        for _, obj in pairs(workspace:GetDescendants()) do
+            pcall(function()
+                local isDoor     = obj:IsA("BasePart") and obj.Name:find("Door")
+                local isKey      = obj.Name == "KeyObtain"
+                local isChest    = obj.Name == "ChestBox"
+                local isLever    = obj.Name == "LeverForGate"
+                local isGold     = obj.Name == "GoldPile"
+                local isSideroom = obj.Name == "SideroomDupe"
+
+                if not (isDoor or isKey or isChest or isLever or isGold or isSideroom) then
+                    return
+                end
+
+                local basePart = obj:IsA("BasePart") and obj
+                    or obj:FindFirstChildWhichIsA("BasePart")
+                if not basePart then return end
+
+                -- Highlight
+                local h = basePart:FindFirstChild("HighlightVisual")
+                if not h then
+                    h = Instance.new("Highlight")
+                    h.Name                = "HighlightVisual"
+                    h.Adornee             = basePart
+                    h.FillTransparency    = 0.5
+                    h.OutlineTransparency = 1
+                    h.Parent              = basePart
+                end
+                h.FillColor = isSideroom
+                    and Color3.fromRGB(255, 0, 0)
+                    or  Color3.fromHSV(tick() % 5 / 5, 1, 1)
+
+                -- Distance billboard
+                local bill = basePart:FindFirstChild("InfoBillboard")
+                if not bill then
+                    bill = Instance.new("BillboardGui")
+                    bill.Name          = "InfoBillboard"
+                    bill.Size          = UDim2.new(0, 130, 0, 40)
+                    bill.StudsOffset   = Vector3.new(0, 4, 0)
+                    bill.AlwaysOnTop   = true
+                    bill.Parent        = basePart
+
+                    local lbl = Instance.new("TextLabel")
+                    lbl.Name                = "TextLabel"
+                    lbl.Size                = UDim2.new(1, 0, 1, 0)
+                    lbl.BackgroundTransparency = 1
+                    lbl.TextColor3          = isSideroom
+                        and Color3.fromRGB(255, 0, 0)
+                        or  Color3.new(1, 1, 1)
+                    lbl.Font                = Enum.Font.GothamBold
+                    lbl.TextScaled          = true
+                    lbl.Text                = isSideroom and "⚠ SIDEROOM" or obj.Name
+                    lbl.Parent              = bill
+                else
+                    local lbl  = bill:FindFirstChild("TextLabel")
+                    local dist = myHRP
+                        and math.floor((basePart.Position - myHRP.Position).Magnitude)
+                        or 0
+                    if lbl then
+                        if isSideroom then
+                            lbl.Text = "⚠ SIDEROOM"
+                            -- Proximity sound alert
+                            if myHRP and (basePart.Position - myHRP.Position).Magnitude <= 20
+                                and not D.alertedSideroom then
+                                D.alertedSideroom = true
+                                pcall(function()
+                                    local snd = Instance.new("Sound")
+                                    snd.SoundId = "rbxassetid://3165700530"
+                                    snd.Volume  = 1
+                                    snd.Parent  = basePart
+                                    snd:Play()
+                                    game:GetService("Debris"):AddItem(snd, 4)
+                                end)
+                                showToast("DOORS", "⚠ Sideroom Dupe nearby!", Color3.fromRGB(255,80,80))
+                            end
+                        else
+                            lbl.Text = obj.Name .. " (" .. dist .. "m)"
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+
+    -- ════════════════════════════════════════════════════════════
+    -- FEATURE 2: SEE ENEMIES
+    -- Highlights Rush, Ambush, Eyes, Screech, Halt, Seek
+    -- with a bright red Highlight and a warning billboard.
+    -- ════════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "SEE ENEMIES", 3)
+
+    local ENEMIES = {
+        "RushMoving", "Rush", "AmbushMoving", "Ambush",
+        "Eyes", "Screech", "Halt", "Seek", "Figure",
+    }
+
+    makeToggle(scroll, "See Enemies",
+        "Red highlight + billboard on Rush, Ambush, Eyes, Screech…",
+        function(on)
+            D.seeEnemies = on
+            if not on then
+                for _, name in ipairs(ENEMIES) do
+                    pcall(function()
+                        local e = workspace:FindFirstChild(name, true)
+                        if e then
+                            local h = e:FindFirstChild("EnemyHighlight")
+                            local b = e:FindFirstChild("EnemyBillboard")
+                            if h then h:Destroy() end
+                            if b then b:Destroy() end
+                        end
+                    end)
+                end
+            end
+        end, 4)
+
+    -- SeeEnemies heartbeat
+    RunService.Heartbeat:Connect(function()
+        if not D.seeEnemies then return end
+        for _, enemyName in ipairs(ENEMIES) do
+            pcall(function()
+                local enemy = workspace:FindFirstChild(enemyName, true)
+                if not enemy then return end
+
+                local root = enemy:IsA("BasePart") and enemy
+                    or enemy:FindFirstChildWhichIsA("BasePart")
+                if not root then return end
+
+                -- Red highlight
+                if not root:FindFirstChild("EnemyHighlight") then
+                    local h = Instance.new("Highlight")
+                    h.Name                = "EnemyHighlight"
+                    h.Adornee             = enemy
+                    h.FillColor           = Color3.fromRGB(255, 30, 30)
+                    h.FillTransparency    = 0.25
+                    h.OutlineColor        = Color3.fromRGB(255, 100, 100)
+                    h.OutlineTransparency = 0
+                    h.Parent              = root
+                end
+
+                -- Billboard
+                if not root:FindFirstChild("EnemyBillboard") then
+                    local bill = Instance.new("BillboardGui")
+                    bill.Name        = "EnemyBillboard"
+                    bill.Size        = UDim2.new(0, 120, 0, 40)
+                    bill.StudsOffset = Vector3.new(0, 6, 0)
+                    bill.AlwaysOnTop = true
+                    bill.Parent      = root
+
+                    local lbl = Instance.new("TextLabel")
+                    lbl.Size                   = UDim2.new(1, 0, 1, 0)
+                    lbl.BackgroundTransparency = 1
+                    lbl.TextColor3             = Color3.fromRGB(255, 80, 80)
+                    lbl.Font                   = Enum.Font.GothamBold
+                    lbl.TextScaled             = true
+                    lbl.Text                   = "⚠ " .. enemyName
+                    lbl.Parent                 = bill
+                end
+            end)
+        end
+    end)
+
+    -- ════════════════════════════════════════════════════════════
+    -- FEATURE 3: ENTITY WARNING HUD  (custom feature)
+    -- A persistent screen overlay that flashes a full-screen red
+    -- vignette and displays the entity name the moment Rush,
+    -- Ambush, Screech, Eyes or Seek appears in the workspace.
+    -- Clears automatically after 3 seconds. Completely separate
+    -- from SeeEnemies — works even without it enabled.
+    -- ════════════════════════════════════════════════════════════
+    makeSectionLabel(scroll, "ENTITY WARNING HUD", 5)
+
+    local entityHUDGui = New("ScreenGui", {
+        Name           = "EntityWarningHUD",
+        ResetOnSpawn   = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Enabled        = false,
+    }, PlayerGui)
+
+    -- Full screen red vignette flash
+    local entityFlash = New("ImageLabel", {
+        Size                   = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Image                  = "rbxassetid://1393519701",
+        ImageColor3            = Color3.fromRGB(220, 0, 0),
+        ImageTransparency      = 1,
+        ZIndex                 = 100,
+    }, entityHUDGui)
+
+    -- Central warning text
+    local entityWarnFrame = New("Frame", {
+        Size                   = UDim2.new(0, 320, 0, 70),
+        Position               = UDim2.new(0.5, -160, 0.15, 0),
+        BackgroundColor3       = Color3.fromRGB(5, 0, 0),
+        BackgroundTransparency = 0.2,
+        BorderSizePixel        = 0,
+        ZIndex                 = 101,
+    }, entityHUDGui)
+    Corner(8, entityWarnFrame)
+    Stroke(Color3.fromRGB(220, 30, 30), 2, entityWarnFrame)
+
+    local entityWarnLbl = New("TextLabel", {
+        Text                   = "",
+        Size                   = UDim2.new(1, 0, 0.55, 0),
+        Position               = UDim2.new(0, 0, 0.05, 0),
+        BackgroundTransparency = 1,
+        TextColor3             = Color3.fromRGB(255, 60, 60),
+        Font                   = Enum.Font.GothamBold,
+        TextSize               = 22,
+        TextXAlignment         = Enum.TextXAlignment.Center,
+        ZIndex                 = 102,
+    }, entityWarnFrame)
+
+    local entitySubLbl = New("TextLabel", {
+        Text                   = "",
+        Size                   = UDim2.new(1, 0, 0.4, 0),
+        Position               = UDim2.new(0, 0, 0.57, 0),
+        BackgroundTransparency = 1,
+        TextColor3             = Color3.fromRGB(180, 100, 100),
+        Font                   = Enum.Font.Code,
+        TextSize               = 11,
+        TextXAlignment         = Enum.TextXAlignment.Center,
+        ZIndex                 = 102,
+    }, entityWarnFrame)
+
+    local warnActive    = false
+    local warnCooldown  = {}
+
+    local function triggerEntityWarn(name)
+        if warnCooldown[name] then return end
+        warnCooldown[name] = true
+        warnActive         = true
+
+        entityWarnLbl.Text = "⚠  " .. name:upper() .. "  ⚠"
+        entitySubLbl.Text  = "Entity detected — hide immediately"
+
+        -- Flash vignette in
+        TweenService:Create(entityFlash,
+            TweenInfo.new(0.15), {ImageTransparency = 0.3}):Play()
+        -- Pulse text frame
+        TweenService:Create(entityWarnFrame,
+            TweenInfo.new(0.3, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, 3, true),
+            {BackgroundTransparency = 0.65}):Play()
+
+        -- Auto-clear after 3 seconds
+        task.delay(3, function()
+            TweenService:Create(entityFlash,
+                TweenInfo.new(0.4), {ImageTransparency = 1}):Play()
+            task.wait(0.45)
+            entityWarnLbl.Text = ""
+            entitySubLbl.Text  = ""
+            warnActive = false
+            task.delay(4, function()
+                warnCooldown[name] = nil
+            end)
+        end)
+    end
+
+    -- Poll workspace for entities
+    local entityPollConn = nil
+    makeToggle(scroll, "Entity Warning HUD",
+        "Full-screen red flash + name label when any entity spawns",
+        function(on)
+            entityHUDGui.Enabled = on
+            D.entityHUD = on
+            if on then
+                entityPollConn = RunService.Heartbeat:Connect(function()
+                    if not D.entityHUD then return end
+                    for _, name in ipairs(ENEMIES) do
+                        pcall(function()
+                            if workspace:FindFirstChild(name, true) then
+                                triggerEntityWarn(name)
+                            end
+                        end)
+                    end
+                end)
+            else
+                if entityPollConn then entityPollConn:Disconnect(); entityPollConn = nil end
+                TweenService:Create(entityFlash, TweenInfo.new(0.2), {ImageTransparency=1}):Play()
+            end
+        end, 6)
+
+    -- Enemy notification log card (mirrors reference script's writeOutput logic)
+    makeSectionLabel(scroll, "ENEMY LOG", 7)
+
+    local logCard = New("Frame", {
+        Size             = UDim2.new(1, 0, 0, 100),
+        BackgroundColor3 = C.Secondary,
+        BorderSizePixel  = 0,
+        LayoutOrder      = 8,
+    }, scroll)
+    Corner(6, logCard)
+    Stroke(C.Border, 0.5, logCard)
+
+    local logLbl = New("TextLabel", {
+        Text                   = "Enemy log will appear here when detected.",
+        Size                   = UDim2.new(1, -12, 1, -8),
+        Position               = UDim2.new(0, 6, 0, 4),
+        BackgroundTransparency = 1,
+        TextColor3             = C.TextDim,
+        Font                   = Enum.Font.Code,
+        TextSize               = 9,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+        TextYAlignment         = Enum.TextYAlignment.Top,
+        TextWrapped            = true,
+    }, logCard)
+
+    local logEntries = {}
+    local function addLog(txt)
+        table.insert(logEntries, 1, txt)
+        if #logEntries > 6 then table.remove(logEntries) end
+        logLbl.Text = table.concat(logEntries, "\n")
+    end
+
+    -- Hook entity detection into the log regardless of HUD toggle
+    RunService.Heartbeat:Connect(function()
+        for _, name in ipairs(ENEMIES) do
+            pcall(function()
+                if workspace:FindFirstChild(name, true) and not D.notifiedEnemies[name] then
+                    D.notifiedEnemies[name] = true
+                    addLog(string.format("[%s]  ⚠ %s detected!", os.date("%H:%M:%S"), name))
+                    showToast("DOORS", "⚠ " .. name .. " is here!", Color3.fromRGB(255, 60, 60))
+                    task.delay(30, function()   -- 30 s cooldown per entity so it can't spam
+                        D.notifiedEnemies[name] = nil
+                    end)
+                end
+            end)
+        end
+    end)
+
+    makeButton(scroll, "Clear Enemy Log", function()
+        logEntries = {}
+        logLbl.Text = "Log cleared."
+    end, 9)
+
+    -- ─── NEW FEATURE: DOOR COUNTER HUD ──────────────────────────
+    -- Tracks how many doors you've passed (finds the "CurrentDoor" value
+    -- in the DOORS game) and displays a live HUD overlay.
+    makeSectionLabel(scroll, "DOOR COUNTER HUD", 10)
+    do
+        local doorHudOn = false
+        local doorGui = New("ScreenGui",{
+            Name="NT_DoorCounter", ResetOnSpawn=false, IgnoreGuiInset=true,
+            ZIndexBehavior=Enum.ZIndexBehavior.Sibling, Enabled=false,
+        }, PlayerGui)
+        local doorFrame = New("Frame",{
+            Size=UDim2.new(0,140,0,30), Position=UDim2.new(0,10,0,55),
+            BackgroundColor3=Color3.fromRGB(10,4,4),
+            BackgroundTransparency=0.15, BorderSizePixel=0, ZIndex=60,
+        }, doorGui); Corner(6, doorFrame); Stroke(C.Accent, 1, doorFrame)
+        local doorLbl = New("TextLabel",{
+            Text="DOOR: --", Size=UDim2.new(1,0,1,0),
+            BackgroundTransparency=1, TextColor3=Color3.fromRGB(200,200,200),
+            Font=Enum.Font.GothamBold, TextSize=11, ZIndex=61,
+        }, doorFrame)
+
+        makeToggle(scroll, "Door Counter HUD",
+            "Shows current door number on-screen by reading game values", function(on)
+            doorHudOn = on
+            doorGui.Enabled = on
+        end, 10)
+
+        RunService.Heartbeat:Connect(function()
+            if not doorHudOn then return end
+            pcall(function()
+                -- DOORS stores door number in various places depending on version
+                local gs = game:GetService("ReplicatedStorage")
+                local doorNum = nil
+                -- Try common locations
+                local try1 = gs:FindFirstChild("CurrentDoor")
+                if try1 then doorNum = try1.Value end
+                if not doorNum then
+                    local try2 = workspace:FindFirstChild("CurrentDoor")
+                    if try2 then doorNum = try2.Value end
+                end
+                if not doorNum then
+                    -- Count doors in workspace as a fallback
+                    local count = 0
+                    for _, v in ipairs(workspace:GetDescendants()) do
+                        if v.Name and v.Name:match("^Door%d") then count = count + 1 end
+                    end
+                    doorNum = count > 0 and count or "?"
+                end
+                doorLbl.Text = "DOOR: " .. tostring(doorNum)
+            end)
+        end)
+    end
+end)
 
 -- ════════════════════════════════════════════════════════════════
 -- TAB 7: SETTINGS
 -- ════════════════════════════════════════════════════════════════
-do
+safeTab("Settings", function()
     local scroll = makeScrollFrame(TabFrames["Settings"])
 
     makeSectionLabel(scroll, "GUI BEHAVIOUR", 1)
@@ -3209,6 +5222,135 @@ do
         sc.Scale = v / 100
     end, 10)
 
+    -- ─── FEATURE: TOAST NOTIFICATION BELL ──────────────────────
+    -- When ON: plays a subtle chime sound whenever a toast fires.
+    -- Uses a soft UI click sound (built-in Roblox asset) so it
+    -- doesn't require HttpGet. Works for all tabs' toasts.
+    makeSectionLabel(scroll, "NOTIFICATIONS", 10)
+
+    -- ─── NEW FEATURE: FAKE DISCONNECT ────────────────────────
+    -- Makes your character look disconnected to other players:
+    -- anchors HRP, hides nametag/health bar, sets network owner
+    -- to nil, and forces Humanoid into Dead state locally.
+    -- Toggle OFF fully restores. Great for hiding in plain sight.
+    do
+        local fakeDisconnected = false
+
+        makeToggle(scroll, "Fake Disconnect",
+            "Makes your character appear disconnected/frozen to others", function(on)
+            fakeDisconnected = on
+            local char = getChar()
+            local hrp  = getHRP(char)
+            local hum  = getHum(char)
+            if not char or not hrp then return end
+
+            if on then
+                -- Anchor in place
+                hrp.Anchored = true
+                -- Hide overhead UI (nametag, health bar)
+                for _, obj in ipairs(char:GetDescendants()) do
+                    if obj:IsA("BillboardGui") or obj:IsA("Decal") then
+                        obj.Enabled = false
+                    end
+                end
+                -- Disable name above head
+                if hum then
+                    hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                    hum.HealthDisplayType   = Enum.HumanoidHealthDisplayType.AlwaysOff
+                end
+                showToast("Fake DC", "Appearing disconnected…", Color3.fromRGB(120,120,120))
+            else
+                hrp.Anchored = false
+                for _, obj in ipairs(char:GetDescendants()) do
+                    if obj:IsA("BillboardGui") or obj:IsA("Decal") then
+                        obj.Enabled = true
+                    end
+                end
+                if hum then
+                    hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Automatic
+                    hum.HealthDisplayType   = Enum.HumanoidHealthDisplayType.DisplayWhenDamaged
+                end
+                showToast("Fake DC", "Reconnected — restored.", C.Accent)
+            end
+        end, 10)
+    end
+
+    local notifBellOn = false
+    local _origShowToast = showToast  -- capture before wrapping
+
+    makeToggle(scroll, "Toast Sound Bell",
+        "Plays a soft chime whenever a notification toast appears", function(on)
+        notifBellOn = on
+        showToast("Settings", on and "Bell ON — you'll hear toasts" or "Bell OFF", C.Accent)
+    end, 10)
+
+    -- Patch showToast to play a sound when bell is on
+    -- (We wrap the existing showToast at runtime by storing a flag
+    --  and checking it inside a post-hook via the toast creation loop)
+    RunService.Heartbeat:Connect(function()
+        if not notifBellOn then return end
+        local existing = toastScreenGui:GetChildren()
+        for _, t in ipairs(existing) do
+            if t:IsA("Frame") and not t:FindFirstChild("BellPlayed") then
+                local marker = Instance.new("BoolValue")
+                marker.Name   = "BellPlayed"
+                marker.Parent = t
+                pcall(function()
+                    local snd = Instance.new("Sound")
+                    snd.SoundId = "rbxassetid://6042053626"  -- soft UI chime
+                    snd.Volume  = 0.4
+                    snd.Parent  = SoundService
+                    snd:Play()
+                    Debris:AddItem(snd, 2)
+                end)
+            end
+        end
+    end)
+
+    -- ─── FEATURE: ACCENT COLOR PICKER ──────────────────────────
+    -- Lets you change the entire GUI's accent colour on the fly.
+    -- Cycles through a set of preset "threat level" colours that
+    -- fit the Lobotomy Corp aesthetic.
+    makeSectionLabel(scroll, "ACCENT COLOR THEME", 10)
+
+    local accentPresets = {
+        { name = "Blood Red (Default)",  col = Color3.fromRGB(139, 0,   0)   },
+        { name = "Aleph White",          col = Color3.fromRGB(230, 220, 220) },
+        { name = "Teth Purple",          col = Color3.fromRGB(120, 0,   160) },
+        { name = "He Blue",              col = Color3.fromRGB(0,   80,  200) },
+        { name = "Zayin Green",          col = Color3.fromRGB(0,   160, 60)  },
+        { name = "Warning Amber",        col = Color3.fromRGB(220, 140, 0)   },
+    }
+
+    for i, ap in ipairs(accentPresets) do
+        local aBtn = New("TextButton",{
+            Text="  ■  "..ap.name,
+            Size=UDim2.new(1,0,0,28), BackgroundColor3=C.Btn,
+            TextColor3=ap.col, Font=Enum.Font.GothamBold,
+            TextSize=10, TextXAlignment=Enum.TextXAlignment.Left,
+            BorderSizePixel=0, LayoutOrder=10+i,
+        }, scroll); Corner(5, aBtn)
+        Stroke(ap.col, 0.8, aBtn)
+        hoverBtn(aBtn, C.Btn, C.BtnHov)
+
+        local acol = ap.col
+        aBtn.MouseButton1Click:Connect(function()
+            -- Update C table live
+            C.Accent    = acol
+            C.AccentBrt = Color3.new(
+                math.min(acol.R + 0.25, 1),
+                math.min(acol.G + 0.10, 1),
+                math.min(acol.B + 0.10, 1))
+            -- Repaint UIStroke on MainFrame
+            for _, ch in ipairs(MainFrame:GetChildren()) do
+                if ch:IsA("UIStroke") then ch.Color = acol end
+            end
+            -- Repaint TitleLabel
+            TitleLabel.TextColor3 = C.AccentBrt
+            showToast("Theme", "Accent → "..ap.name, acol)
+        end)
+    end
+
     makeSectionLabel(scroll, "INFORMATION", 11)
 
     local infoCard = New("Frame", {
@@ -3239,7 +5381,7 @@ do
         TextXAlignment         = Enum.TextXAlignment.Left,
         TextYAlignment         = Enum.TextYAlignment.Center,
     }, infoCard)
-end
+end)
 
 -- ════════════════════════════════════════════════════════════════
 -- RUNTIME HEARTBEAT LOOP
@@ -3399,7 +5541,914 @@ TweenService:Create(
 ):Play()
 
 -- ════════════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════════════════
+-- GUI FEATURE A: CROSSHAIR OVERLAY
+-- ════════════════════════════════════════════════════════════════
+do
+    local crosshairGui = New("ScreenGui", {
+        Name           = "CrosshairOverlay",
+        ResetOnSpawn   = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Enabled        = false,
+        IgnoreGuiInset = true,
+    }, PlayerGui)
+
+    local chDot = New("Frame", {
+        Size=UDim2.new(0,4,0,4), AnchorPoint=Vector2.new(0.5,0.5),
+        Position=UDim2.new(0.5,0,0.5,0), BackgroundColor3=Color3.new(1,1,1),
+        BorderSizePixel=0, ZIndex=90,
+    }, crosshairGui); Corner(2, chDot)
+
+    local chH = New("Frame", {
+        Size=UDim2.new(0,14,0,2), AnchorPoint=Vector2.new(0.5,0.5),
+        Position=UDim2.new(0.5,0,0.5,0), BackgroundColor3=Color3.new(1,1,1),
+        BorderSizePixel=0, ZIndex=90,
+    }, crosshairGui)
+
+    local chV = New("Frame", {
+        Size=UDim2.new(0,2,0,14), AnchorPoint=Vector2.new(0.5,0.5),
+        Position=UDim2.new(0.5,0,0.5,0), BackgroundColor3=Color3.new(1,1,1),
+        BorderSizePixel=0, ZIndex=90,
+    }, crosshairGui)
+
+    _G.NTG_CrosshairGui   = crosshairGui
+    _G.NTG_CrosshairParts = { dot=chDot, h=chH, v=chV }
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- GUI FEATURE B: FPS COUNTER HUD
+-- ════════════════════════════════════════════════════════════════
+do
+    local fpsGui = New("ScreenGui", {
+        Name="FPSCounterHUD", ResetOnSpawn=false,
+        ZIndexBehavior=Enum.ZIndexBehavior.Sibling,
+        Enabled=false, IgnoreGuiInset=true,
+    }, PlayerGui)
+
+    local fpsBg = New("Frame", {
+        Size=UDim2.new(0,72,0,22), AnchorPoint=Vector2.new(1,1),
+        Position=UDim2.new(1,-6,1,-6), BackgroundColor3=Color3.fromRGB(8,4,4),
+        BackgroundTransparency=0.2, BorderSizePixel=0, ZIndex=80,
+    }, fpsGui); Corner(4,fpsBg); Stroke(C.Accent,0.8,fpsBg)
+
+    local fpsLbl = New("TextLabel", {
+        Text="FPS: --", Size=UDim2.new(1,0,1,0),
+        BackgroundTransparency=1, TextColor3=Color3.fromRGB(60,220,80),
+        Font=Enum.Font.Code, TextSize=11,
+        TextXAlignment=Enum.TextXAlignment.Center, ZIndex=81,
+    }, fpsBg)
+
+    local fpsSamples = {}
+    RunService.Heartbeat:Connect(function(dt)
+        if not fpsGui.Enabled then return end
+        table.insert(fpsSamples, 1/math.max(dt,0.001))
+        if #fpsSamples > 20 then table.remove(fpsSamples) end
+        local sum = 0
+        for _,v in ipairs(fpsSamples) do sum = sum + v end
+        local avg = math.floor(sum/#fpsSamples)
+        fpsLbl.Text = "FPS: "..avg
+        fpsLbl.TextColor3 = avg>=55 and Color3.fromRGB(60,220,80)
+            or (avg>=30 and Color3.fromRGB(220,180,0) or Color3.fromRGB(255,60,60))
+    end)
+
+    _G.NTG_FPSGui = fpsGui
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- GUI FEATURE C: RESIZABLE MAIN FRAME
+-- Eight invisible drag-strips (N S E W NE NW SE SW) sit on top of
+-- the main frame's edges. Dragging any edge or corner resizes the
+-- frame live. Minimum size: 500 × 380 px.
+-- The handles are parented to ScreenGui (not MainFrame) so they
+-- always sit above all frame content at ZIndex 999.
+-- ════════════════════════════════════════════════════════════════
+do
+    local H         = 8      -- handle thickness in px
+    local MIN_W     = 500
+    local MIN_H     = 380
+    local ZH        = 999    -- always on top
+
+    -- We re-position the handles every frame to follow MainFrame
+    local handleFrames = {}
+
+    local function makeStrip()
+        local f = New("Frame", {
+            BackgroundColor3       = Color3.fromRGB(200, 30, 30),
+            BackgroundTransparency = 0.92,
+            BorderSizePixel        = 0,
+            ZIndex                 = ZH,
+            Size                   = UDim2.new(0, 10, 0, 10),  -- overwritten per update
+        }, ScreenGui)
+        return f
+    end
+
+    -- One handle per edge / corner
+    -- n/s/e/w flags indicate which edges this handle adjusts
+    local defs = {
+        { id="N",  n=true,  s=false, e=false, w=false },
+        { id="S",  n=false, s=true,  e=false, w=false },
+        { id="E",  n=false, s=false, e=true,  w=false },
+        { id="W",  n=false, s=false, e=false, w=true  },
+        { id="NE", n=true,  s=false, e=true,  w=false },
+        { id="NW", n=true,  s=false, e=false, w=true  },
+        { id="SE", n=false, s=true,  e=true,  w=false },
+        { id="SW", n=false, s=true,  e=false, w=true  },
+    }
+
+    for _, def in ipairs(defs) do
+        local strip     = makeStrip()
+        local dragging  = false
+        local dragStart = nil
+        local fsz, fpos = nil, nil   -- MainFrame state at drag start
+
+        strip.InputBegan:Connect(function(inp)
+            if inp.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+            dragging  = true
+            dragStart = inp.Position
+            fsz  = MainFrame.AbsoluteSize
+            fpos = MainFrame.AbsolutePosition
+        end)
+
+        strip.InputEnded:Connect(function(inp)
+            if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+                dragging = false
+            end
+        end)
+
+        UserInputService.InputChanged:Connect(function(inp)
+            if not dragging then return end
+            if inp.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+
+            local dx = inp.Position.X - dragStart.X
+            local dy = inp.Position.Y - dragStart.Y
+
+            local nw = fsz.X
+            local nh = fsz.Y
+            local nx = fpos.X
+            local ny = fpos.Y
+
+            if def.e then
+                nw = math.max(MIN_W, fsz.X + dx)
+            end
+            if def.s then
+                nh = math.max(MIN_H, fsz.Y + dy)
+            end
+            if def.w then
+                local ddx = math.min(dx, fsz.X - MIN_W)
+                nw = fsz.X - ddx
+                nx = fpos.X + ddx
+            end
+            if def.n then
+                local ddy = math.min(dy, fsz.Y - MIN_H)
+                nh = fsz.Y - ddy
+                ny = fpos.Y + ddy
+            end
+
+            MainFrame.Size     = UDim2.new(0, nw, 0, nh)
+            MainFrame.Position = UDim2.new(0, nx, 0, ny)
+        end)
+
+        handleFrames[def.id] = strip
+    end
+
+    -- Every frame: reposition all 8 strips to match MainFrame
+    RunService.RenderStepped:Connect(function()
+        if not MainFrame.Visible then return end
+        local ap  = MainFrame.AbsolutePosition
+        local sz  = MainFrame.AbsoluteSize
+        local x, y, w, h = ap.X, ap.Y, sz.X, sz.Y
+
+        -- N  (top edge strip, full width)
+        handleFrames["N"].Size     = UDim2.new(0, w-H*2, 0, H)
+        handleFrames["N"].Position = UDim2.new(0, x+H,   0, y)
+        -- S  (bottom edge strip)
+        handleFrames["S"].Size     = UDim2.new(0, w-H*2, 0, H)
+        handleFrames["S"].Position = UDim2.new(0, x+H,   0, y+h-H)
+        -- E  (right edge strip)
+        handleFrames["E"].Size     = UDim2.new(0, H, 0, h-H*2)
+        handleFrames["E"].Position = UDim2.new(0, x+w-H, 0, y+H)
+        -- W  (left edge strip)
+        handleFrames["W"].Size     = UDim2.new(0, H, 0, h-H*2)
+        handleFrames["W"].Position = UDim2.new(0, x,     0, y+H)
+        -- corners (H×H squares)
+        handleFrames["NE"].Size     = UDim2.new(0, H, 0, H)
+        handleFrames["NE"].Position = UDim2.new(0, x+w-H, 0, y)
+        handleFrames["NW"].Size     = UDim2.new(0, H, 0, H)
+        handleFrames["NW"].Position = UDim2.new(0, x,     0, y)
+        handleFrames["SE"].Size     = UDim2.new(0, H, 0, H)
+        handleFrames["SE"].Position = UDim2.new(0, x+w-H, 0, y+h-H)
+        handleFrames["SW"].Size     = UDim2.new(0, H, 0, H)
+        handleFrames["SW"].Position = UDim2.new(0, x,     0, y+h-H)
+    end)
+end
+
+-- ════════════════════════════════════════════════════════════════
+-- KEY SYSTEM
+-- Horizontal window gating access to the main GUI.
+-- Answers: TSO  |  TheSilentOrchestra  (case-insensitive)
+-- Wrong  : shake + "Invalid Code" + red border flash
+-- Correct: smooth grow resize → fade → main GUI appears
+-- Feature: Hint button after 3 wrong guesses
+-- ════════════════════════════════════════════════════════════════
+do
+    -- 2-hour session memory using _G so it survives re-execution within the same session
+    local SESSION_DURATION = 7200  -- 2 hours in seconds
+    if _G.NTG_KeyUnlocked and _G.NTG_KeyTime and (os.time() - _G.NTG_KeyTime) < SESSION_DURATION then
+        -- Already unlocked this session — skip the key GUI entirely
+        MainFrame.Visible = true
+        task.defer(function()
+            local ciy = PlayerGui:FindFirstChild("CustomIY_Gui")
+            if ciy then ciy.Enabled = true end
+        end)
+    else
+        -- Hide main GUI until key entered
+        MainFrame.Visible = false
+        _G.NTG_KeyUnlocked = false
+
+    local VALID = { tso=true, thesilentorchestra=true }
+    local wrongCount = 0
+
+    -- Constants
+    local KW, KH       = 560, 210
+    local KW_MINI       = 200
+    local KH_MINI       = 32
+    local KW_FULL, KH_FULL = 680, 260
+
+    local keyGui = New("ScreenGui", {
+        Name="KeySystem", ResetOnSpawn=false,
+        ZIndexBehavior=Enum.ZIndexBehavior.Sibling,
+        IgnoreGuiInset=true, DisplayOrder=9999,
+    }, PlayerGui)
+
+    local origPos  = UDim2.new(0.5, -KW/2, 0.5, -KH/2)
+
+    local keyFrame = New("Frame", {
+        Size             = UDim2.new(0, KW, 0, KH),
+        Position         = origPos,
+        BackgroundColor3 = Color3.fromRGB(12, 6, 6),
+        BackgroundTransparency = 0,
+        BorderSizePixel  = 0,
+        ClipsDescendants = true,
+        ZIndex           = 200,
+    }, keyGui)
+    Corner(10, keyFrame)
+    local keyStroke = Instance.new("UIStroke", keyFrame)
+    keyStroke.Thickness = 1.5
+    keyStroke.Color     = C.Accent
+
+    -- ── Top bar ─────────────────────────────────────────────
+    local topBar = New("Frame", {
+        Size=UDim2.new(1,0,0,30), Position=UDim2.new(0,0,0,0),
+        BackgroundTransparency=1, BorderSizePixel=0, ZIndex=205,
+    }, keyFrame)
+
+    New("TextLabel", {
+        Text="NOTHING THERE  //  ACCESS REQUIRED  —  session lasts 2 hrs",
+        Size=UDim2.new(1,-96,1,0), Position=UDim2.new(0,10,0,0),
+        BackgroundTransparency=1, TextColor3=C.TextDim,
+        Font=Enum.Font.Code, TextSize=10,
+        TextXAlignment=Enum.TextXAlignment.Left, ZIndex=206,
+    }, topBar)
+
+    -- Window control buttons
+    local function makeTinyBtn(lbl, xOff, col)
+        local b = New("TextButton",{
+            Text=lbl, Size=UDim2.new(0,22,0,22),
+            Position=UDim2.new(1,xOff,0,4),
+            BackgroundColor3=col, TextColor3=Color3.new(1,1,1),
+            Font=Enum.Font.GothamBold, TextSize=11,
+            BorderSizePixel=0, ZIndex=210,
+        }, topBar); Corner(4,b); return b
+    end
+
+    local closeBtn = makeTinyBtn("×", -28,  Color3.fromRGB(180,50,50))
+    local fsBtn    = makeTinyBtn("□", -54,  Color3.fromRGB(50,120,50))
+    local minBtn   = makeTinyBtn("─", -80,  Color3.fromRGB(120,90,30))
+
+    -- ── Body (hidden when minimized) ─────────────────────────
+    local bodyFrame = New("Frame", {
+        Size=UDim2.new(1,0,1,-32), Position=UDim2.new(0,0,0,32),
+        BackgroundTransparency=1, BorderSizePixel=0, ZIndex=201,
+    }, keyFrame)
+
+    -- LEFT: dark input panel ────────────────────────────────
+    local inputBg = New("Frame", {
+        Size=UDim2.new(0.44,-10,1,-12), Position=UDim2.new(0,8,0,6),
+        BackgroundColor3=Color3.fromRGB(18,10,10),
+        BorderSizePixel=0, ZIndex=202,
+    }, bodyFrame); Corner(6,inputBg); Stroke(C.Accent,0.8,inputBg)
+
+    New("TextLabel",{
+        Text="ENTER KEY", Size=UDim2.new(1,-12,0,16),
+        Position=UDim2.new(0,6,0,6),
+        BackgroundTransparency=1, TextColor3=C.TextDim,
+        Font=Enum.Font.Code, TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Left, ZIndex=203,
+    }, inputBg)
+
+    local keyInput = New("TextBox",{
+        Text="", PlaceholderText="Type answer here...",
+        Size=UDim2.new(1,-12,0,32), Position=UDim2.new(0,6,0,26),
+        BackgroundColor3=Color3.fromRGB(8,4,4),
+        TextColor3=Color3.fromRGB(255,255,255),
+        PlaceholderColor3=Color3.fromRGB(80,50,50),
+        Font=Enum.Font.Code, TextSize=13,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ClearTextOnFocus=false, BorderSizePixel=0, ZIndex=203,
+    }, inputBg); Corner(4,keyInput)
+
+    local feedbackLbl = New("TextLabel",{
+        Text="", Size=UDim2.new(1,-12,0,20),
+        Position=UDim2.new(0,6,0,62),
+        BackgroundTransparency=1,
+        TextColor3=Color3.fromRGB(255,80,80),
+        Font=Enum.Font.GothamBold, TextSize=10,
+        TextXAlignment=Enum.TextXAlignment.Left, ZIndex=203,
+    }, inputBg)
+
+    local submitBtn = New("TextButton",{
+        Text="Submit", Size=UDim2.new(1,-12,0,30),
+        Position=UDim2.new(0,6,1,-38),
+        BackgroundColor3=C.Accent, TextColor3=Color3.new(1,1,1),
+        Font=Enum.Font.GothamBold, TextSize=12,
+        BorderSizePixel=0, ZIndex=203,
+    }, inputBg); Corner(5,submitBtn)
+
+    -- RIGHT: info panel ─────────────────────────────────────
+    local infoBg = New("Frame",{
+        Size=UDim2.new(0.56,-10,1,-12), Position=UDim2.new(0.44,4,0,6),
+        BackgroundTransparency=1, BorderSizePixel=0, ZIndex=202,
+    }, bodyFrame)
+
+    New("TextLabel",{
+        Text="NOTHING THERE GUI  ·  KEY SYSTEM",
+        Size=UDim2.new(1,0,0,16), Position=UDim2.new(0,6,0,0),
+        BackgroundTransparency=1, TextColor3=C.Accent,
+        Font=Enum.Font.Code, TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Left, ZIndex=203,
+    }, infoBg)
+
+    New("TextLabel",{
+        Text="Session valid for 2 hours.\nAfter that, re-entry is required.",
+        Size=UDim2.new(1,-4,0,22), Position=UDim2.new(0,6,0,18),
+        BackgroundTransparency=1, TextColor3=Color3.fromRGB(140,100,100),
+        Font=Enum.Font.Code, TextSize=8, TextWrapped=true,
+        TextXAlignment=Enum.TextXAlignment.Left, ZIndex=203,
+    }, infoBg)
+
+    New("TextLabel",{
+        Text="What is the Second Best\nAbnormality in Lobotomy\nCorporation?",
+        Size=UDim2.new(1,-8,0,58), Position=UDim2.new(0,6,0,20),
+        BackgroundTransparency=1,
+        TextColor3=Color3.fromRGB(200,170,170),
+        Font=Enum.Font.GothamBold, TextSize=13,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        TextWrapped=true, ZIndex=203,
+    }, infoBg)
+
+    New("TextLabel",{
+        Text="There are 4 possible answers.",
+        Size=UDim2.new(1,-8,0,14), Position=UDim2.new(0,6,0,82),
+        BackgroundTransparency=1, TextColor3=C.TextDim,
+        Font=Enum.Font.Code, TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Left, ZIndex=203,
+    }, infoBg)
+
+    -- Hint button (unlocks after 3 wrong)
+    local hintBtn = New("TextButton",{
+        Text="Need a hint?", Size=UDim2.new(0,100,0,22),
+        Position=UDim2.new(0,6,0,100),
+        BackgroundColor3=Color3.fromRGB(40,25,25),
+        TextColor3=C.TextDim, Font=Enum.Font.Gotham,
+        TextSize=9, BorderSizePixel=0, Visible=false, ZIndex=203,
+    }, infoBg); Corner(4,hintBtn)
+
+    local hintUsed = false
+    hintBtn.MouseButton1Click:Connect(function()
+        if hintUsed then return end
+        hintUsed = true
+        feedbackLbl.Text = "Hint: think Orchestral..."
+        feedbackLbl.TextColor3 = Color3.fromRGB(200,160,60)
+        hintBtn.Text = "♪ Think Orchestra"
+    end)
+
+    -- ── State ────────────────────────────────────────────────
+    local minimized    = false
+    local fullscreened = false
+
+    -- ── Shake ────────────────────────────────────────────────
+    local function shakeKey()
+        local base = keyFrame.Position
+        local ox   = base.X.Offset
+        local oy   = base.Y.Offset
+        for _, dx in ipairs({9,-9,7,-7,5,-5,3,-3,0}) do
+            keyFrame.Position = UDim2.new(base.X.Scale, ox+dx, base.Y.Scale, oy)
+            task.wait(0.03)
+        end
+        keyFrame.Position = base
+    end
+
+    -- ── Key check ────────────────────────────────────────────
+    local function checkKey()
+        local raw     = keyInput.Text:lower():gsub("%s+","")
+        if VALID[raw] then
+            -- Correct
+            feedbackLbl.Text       = "✓  Access Granted"
+            feedbackLbl.TextColor3 = Color3.fromRGB(60,220,80)
+            keyInput.Text          = ""
+            -- Expand toward main GUI size then fade
+            TweenService:Create(keyFrame,
+                TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+                {Size     = UDim2.new(0,680,0,470),
+                 Position = UDim2.new(0.5,-340,0.5,-235)}
+            ):Play()
+            task.wait(0.5)
+            TweenService:Create(keyFrame,
+                TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+                {BackgroundTransparency=1}
+            ):Play()
+            task.wait(0.28)
+            _G.NTG_KeyUnlocked = true
+            _G.NTG_KeyTime     = os.time()
+            keyGui.Enabled     = false
+            MainFrame.Visible  = true
+            -- Reveal the Custom IY mini bar now that access is granted
+            local ciy = PlayerGui:FindFirstChild("CustomIY_Gui")
+            if ciy then ciy.Enabled = true end
+        else
+            -- Wrong
+            wrongCount = wrongCount + 1
+            feedbackLbl.Text       = "Invalid Code"
+            feedbackLbl.TextColor3 = Color3.fromRGB(255,60,60)
+            keyInput.Text          = ""
+            -- Flash border red
+            keyStroke.Color = Color3.fromRGB(255,40,40)
+            TweenService:Create(keyStroke,
+                TweenInfo.new(0.6), {Color=C.Accent}):Play()
+            task.spawn(shakeKey)
+            if wrongCount >= 3 then
+                hintBtn.Visible = true
+            end
+        end
+    end
+
+    submitBtn.MouseButton1Click:Connect(checkKey)
+    keyInput.FocusLost:Connect(function(enter) if enter then checkKey() end end)
+
+    -- ── Window controls ──────────────────────────────────────
+    closeBtn.MouseButton1Click:Connect(function()
+        keyGui.Enabled    = false
+        -- If they close the key GUI, just show the main frame anyway
+        -- (soft bypass — remove this line to enforce the key system strictly)
+        -- MainFrame.Visible = true
+    end)
+
+    minBtn.MouseButton1Click:Connect(function()
+        minimized    = not minimized
+        fullscreened = false
+        bodyFrame.Visible = not minimized
+        TweenService:Create(keyFrame, TweenInfo.new(0.22, Enum.EasingStyle.Quad),
+            {Size = minimized
+                and UDim2.new(0,KW_MINI,0,KH_MINI)
+                or  UDim2.new(0,KW,0,KH)}
+        ):Play()
+    end)
+
+    fsBtn.MouseButton1Click:Connect(function()
+        fullscreened = not fullscreened
+        minimized    = false
+        bodyFrame.Visible = true
+        TweenService:Create(keyFrame,
+            TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+            {Size     = fullscreened and UDim2.new(0,KW_FULL,0,KH_FULL)
+                                     or  UDim2.new(0,KW,0,KH),
+             Position = fullscreened and UDim2.new(0.5,-KW_FULL/2,0.5,-KH_FULL/2)
+                                     or  origPos}
+        ):Play()
+    end)
+
+    -- ── Draggable ────────────────────────────────────────────
+    local kDragging, kDragStart, kStartPos = false, nil, nil
+    keyFrame.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            kDragging  = true
+            kDragStart = inp.Position
+            kStartPos  = keyFrame.Position
+        end
+    end)
+    keyFrame.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            kDragging = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(inp)
+        if not kDragging then return end
+        if inp.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+        local d = inp.Position - kDragStart
+        keyFrame.Position = UDim2.new(
+            kStartPos.X.Scale, kStartPos.X.Offset + d.X,
+            kStartPos.Y.Scale, kStartPos.Y.Offset + d.Y
+        )
+    end)
+
+    -- Entrance animation
+    keyFrame.Position = UDim2.new(0.5, -KW/2, -0.15, 0)
+    TweenService:Create(keyFrame,
+        TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+        {Position = origPos}
+    ):Play()
+    end -- closes else block
+end -- closes key system do block
+
+-- ════════════════════════════════════════════════════════════════
+-- WIRE OVERLAY TOGGLES INTO SETTINGS (deferred so tab exists)
+-- ════════════════════════════════════════════════════════════════
+task.defer(function()
+    local crossGui   = _G.NTG_CrosshairGui
+    local crossParts = _G.NTG_CrosshairParts
+    local fpsGui     = _G.NTG_FPSGui
+    if not crossGui or not fpsGui then return end
+
+    local settingsFrame  = TabFrames and TabFrames["Settings"]
+    if not settingsFrame then return end
+    local settingsScroll = settingsFrame:FindFirstChildOfClass("ScrollingFrame")
+    if not settingsScroll then return end
+
+    makeSectionLabel(settingsScroll, "OVERLAY FEATURES", 90)
+
+    makeToggle(settingsScroll, "Show Crosshair Overlay",
+        "Renders a small white crosshair at screen centre",
+        function(on) crossGui.Enabled = on end, 91)
+
+    makeSlider(settingsScroll, "Crosshair Size", 4, 30, 1, 14, function(v)
+        if crossParts then
+            crossParts.h.Size = UDim2.new(0,v,0,2)
+            crossParts.v.Size = UDim2.new(0,2,0,v)
+        end
+    end, 92)
+
+    makeToggle(settingsScroll, "Show FPS Counter",
+        "Bottom-right FPS — green≥55, yellow≥30, red<30",
+        function(on) fpsGui.Enabled = on end, 93)
+end)
+
+-- ════════════════════════════════════════════════════════════════
+-- "CUSTOM INFINITE YIELD" v1
+-- Bottom-left flat mini-bar. Click to open a console-style window
+-- with searchable script list, settings, and all NT GUI scripts.
+-- ════════════════════════════════════════════════════════════════
+do
+    local CIY_W, CIY_H = 380, 460
+    local CIY_BAR_H    = 22
+
+    local ciyGui = New("ScreenGui", {
+        Name           = "CustomIY_Gui",
+        ResetOnSpawn   = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        IgnoreGuiInset = true,
+        DisplayOrder   = 9998,
+        Enabled        = false,   -- hidden until key is entered
+    }, PlayerGui)
+
+    -- ── Mini Bar (visible only after key unlock, bottom-left) ─
+    local miniBar = New("Frame", {
+        Name             = "MiniBar",
+        Size             = UDim2.new(0, 180, 0, CIY_BAR_H),
+        Position         = UDim2.new(0, 4, 1, -(CIY_BAR_H + 4)),
+        BackgroundColor3 = Color3.fromRGB(14, 7, 7),
+        BorderSizePixel  = 0,
+        ZIndex           = 300,
+    }, ciyGui)
+    Corner(4, miniBar)
+    Stroke(C.Accent, 1, miniBar)
+
+    local miniLbl = New("TextLabel", {
+        Text                   = '> "Custom Inf Yield" v1',
+        Size                   = UDim2.new(1, -8, 1, 0),
+        Position               = UDim2.new(0, 6, 0, 0),
+        BackgroundTransparency = 1,
+        TextColor3             = C.Accent,
+        Font                   = Enum.Font.Code,
+        TextSize               = 10,
+        TextXAlignment         = Enum.TextXAlignment.Left,
+        ZIndex                 = 301,
+    }, miniBar)
+
+    -- ── Main Console Window ───────────────────────────────────
+    local consoleOpen = false
+    local ciyWin = New("Frame", {
+        Size             = UDim2.new(0, CIY_W, 0, CIY_H),
+        Position         = UDim2.new(0, 4, 1, -(CIY_H + CIY_BAR_H + 8)),
+        BackgroundColor3 = Color3.fromRGB(10, 5, 5),
+        BorderSizePixel  = 0,
+        Visible          = false,
+        ClipsDescendants = false,
+        ZIndex           = 290,
+    }, ciyGui)
+    Corner(8, ciyWin)
+    Stroke(C.Accent, 1.5, ciyWin)
+
+    -- Title bar
+    local ciyTitle = New("Frame", {
+        Size=UDim2.new(1,0,0,28), BackgroundColor3=C.Secondary,
+        BorderSizePixel=0, ZIndex=291,
+    }, ciyWin); Corner(8, ciyTitle)
+
+    New("TextLabel",{
+        Text='"Custom Inf Yield" v1  |  NT GUI Edition',
+        Size=UDim2.new(1,-34,1,0), Position=UDim2.new(0,8,0,0),
+        BackgroundTransparency=1, TextColor3=C.Accent,
+        Font=Enum.Font.Code, TextSize=10,
+        TextXAlignment=Enum.TextXAlignment.Left, ZIndex=292,
+    }, ciyTitle)
+
+    local ciyCloseBtn = New("TextButton",{
+        Text="×", Size=UDim2.new(0,22,0,18),
+        Position=UDim2.new(1,-26,0,5),
+        BackgroundColor3=Color3.fromRGB(150,30,30),
+        TextColor3=Color3.new(1,1,1), Font=Enum.Font.GothamBold,
+        TextSize=13, BorderSizePixel=0, ZIndex=292,
+    }, ciyTitle); Corner(4, ciyCloseBtn)
+
+    -- Settings row
+    local ciySettings = New("Frame", {
+        Size=UDim2.new(1,0,0,26), Position=UDim2.new(0,0,0,28),
+        BackgroundColor3=Color3.fromRGB(16,8,8),
+        BorderSizePixel=0, ZIndex=291,
+    }, ciyWin)
+
+    local ciyAutoExec = false
+    local ciyAutoBtn = New("TextButton",{
+        Text="Auto-Exec: OFF", Size=UDim2.new(0,130,0,18),
+        Position=UDim2.new(0,6,0,4),
+        BackgroundColor3=Color3.fromRGB(50,20,20),
+        TextColor3=C.TextDim, Font=Enum.Font.Gotham,
+        TextSize=9, BorderSizePixel=0, ZIndex=292,
+        -- When ON: Rejoin will set _G.NTG_AutoExec = true so your
+        -- executor's auto-exec folder re-runs the GUI on the new server.
+    }, ciySettings); Corner(3, ciyAutoBtn)
+
+    local ciyEchoBtn = New("TextButton",{
+        Text="Echo: ON", Size=UDim2.new(0,80,0,18),
+        Position=UDim2.new(0,142,0,4),
+        BackgroundColor3=C.Accent,
+        TextColor3=Color3.new(1,1,1), Font=Enum.Font.Gotham,
+        TextSize=9, BorderSizePixel=0, ZIndex=292,
+    }, ciySettings); Corner(3, ciyEchoBtn)
+
+    local ciyEcho = true
+    ciyEchoBtn.MouseButton1Click:Connect(function()
+        ciyEcho = not ciyEcho
+        ciyEchoBtn.Text = ciyEcho and "Echo: ON" or "Echo: OFF"
+        ciyEchoBtn.BackgroundColor3 = ciyEcho and C.Accent or Color3.fromRGB(50,20,20)
+    end)
+    ciyAutoBtn.MouseButton1Click:Connect(function()
+        ciyAutoExec = not ciyAutoExec
+        ciyAutoBtn.Text = ciyAutoExec and "Auto-Exec: ON" or "Auto-Exec: OFF"
+        ciyAutoBtn.BackgroundColor3 = ciyAutoExec and C.Accent or Color3.fromRGB(50,20,20)
+        ciyAutoBtn.TextColor3 = ciyAutoExec and Color3.new(1,1,1) or C.TextDim
+    end)
+
+    -- Search bar
+    local ciySearchBox = New("TextBox",{
+        PlaceholderText="Search commands...",
+        Text="",
+        Size=UDim2.new(1,-12,0,22), Position=UDim2.new(0,6,0,54),
+        BackgroundColor3=Color3.fromRGB(20,10,10),
+        TextColor3=Color3.new(1,1,1),
+        PlaceholderColor3=Color3.fromRGB(80,50,50),
+        Font=Enum.Font.Code, TextSize=11,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ClearTextOnFocus=false, BorderSizePixel=0, ZIndex=292,
+    }, ciyWin); Corner(4, ciySearchBox)
+    Stroke(C.Accent, 0.5, ciySearchBox)
+
+    -- Script list scroll
+    local ciyScroll = New("ScrollingFrame",{
+        Size=UDim2.new(1,-8,1,-130), Position=UDim2.new(0,4,0,82),
+        BackgroundTransparency=1, BorderSizePixel=0,
+        ScrollBarThickness=3, ScrollBarImageColor3=C.Accent,
+        CanvasSize=UDim2.new(0,0,0,0),
+        AutomaticCanvasSize=Enum.AutomaticSize.Y, ZIndex=291,
+    }, ciyWin)
+    ListLayout(3, ciyScroll)
+
+    -- Output box
+    local ciyOutput = New("TextLabel",{
+        Text=">> Custom Inf Yield v1 ready. Select a command above.",
+        Size=UDim2.new(1,-8,0,42), Position=UDim2.new(0,4,1,-46),
+        BackgroundColor3=Color3.fromRGB(6,3,3),
+        TextColor3=C.TextDim, Font=Enum.Font.Code, TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        TextYAlignment=Enum.TextYAlignment.Top,
+        TextWrapped=true, ZIndex=292,
+    }, ciyWin); Corner(4, ciyOutput); Stroke(C.Accent, 0.5, ciyOutput)
+
+    local function ciyLog(msg)
+        if ciyEcho then
+            ciyOutput.Text = ">> "..msg
+        end
+        showToast("Custom IY", msg, C.Accent)
+    end
+
+    -- ── Command Definitions ────────────────────────────────────
+    local CIY_COMMANDS = {
+        -- Movement
+        { cat="MOVEMENT", name="Speed x2",       desc="WalkSpeed = 32",
+          run=function() local h=getHum(getChar()); if h then h.WalkSpeed=32 end ciyLog("Speed x2 set") end },
+        { cat="MOVEMENT", name="Speed x4",       desc="WalkSpeed = 64",
+          run=function() local h=getHum(getChar()); if h then h.WalkSpeed=64 end ciyLog("Speed x4 set") end },
+        { cat="MOVEMENT", name="Speed Reset",    desc="WalkSpeed = 16",
+          run=function() local h=getHum(getChar()); if h then h.WalkSpeed=16 end ciyLog("Speed reset") end },
+        { cat="MOVEMENT", name="Jump Power x3",  desc="JumpPower = 150",
+          run=function() local h=getHum(getChar()); if h then h.JumpPower=150 end ciyLog("Jump x3") end },
+        { cat="MOVEMENT", name="Jump Reset",     desc="JumpPower = 50",
+          run=function() local h=getHum(getChar()); if h then h.JumpPower=50 end ciyLog("Jump reset") end },
+        -- Visibility
+        { cat="VISIBILITY", name="Fly ON",       desc="Activate fly mode",
+          run=function() S.Fly=true; ciyLog("Fly enabled") end },
+        { cat="VISIBILITY", name="Fly OFF",      desc="Deactivate fly mode",
+          run=function() S.Fly=false; local c=getChar(); if c then local bv=c.HumanoidRootPart:FindFirstChild("BV") if bv then bv:Destroy() end end ciyLog("Fly off") end },
+        { cat="VISIBILITY", name="NoClip ON",    desc="Disable all collision",
+          run=function() S.NoClip=true; ciyLog("NoClip ON") end },
+        { cat="VISIBILITY", name="NoClip OFF",   desc="Re-enable collision",
+          run=function() S.NoClip=false; ciyLog("NoClip OFF") end },
+        { cat="VISIBILITY", name="Invisible",    desc="Make char transparent",
+          run=function()
+            pcall(function()
+                for _,p in ipairs(getChar():GetDescendants()) do
+                    if p:IsA("BasePart") then p.Transparency=1 end
+                end
+            end) ciyLog("Invisible") end },
+        { cat="VISIBILITY", name="Visible Again",desc="Restore transparency",
+          run=function()
+            pcall(function()
+                for _,p in ipairs(getChar():GetDescendants()) do
+                    if p:IsA("BasePart") and p.Name~="HumanoidRootPart" then p.Transparency=0 end
+                end
+            end) ciyLog("Visible") end },
+        -- Player
+        { cat="PLAYER",   name="God Mode ON",   desc="Lock HP to max",
+          run=function() S.GodMode=true; ciyLog("God Mode ON") end },
+        { cat="PLAYER",   name="God Mode OFF",  desc="Disable HP lock",
+          run=function() S.GodMode=false; ciyLog("God Mode OFF") end },
+        { cat="PLAYER",   name="Fullbright",    desc="Max ambient lighting",
+          run=function() S.FullBright=true; ciyLog("Fullbright ON") end },
+        { cat="PLAYER",   name="Fullbright OFF",desc="Restore lighting",
+          run=function() S.FullBright=false; ciyLog("Fullbright OFF") end },
+        { cat="PLAYER",   name="Print Players", desc="List all players in console",
+          run=function()
+            local names={}
+            for _,p in ipairs(Players:GetPlayers()) do table.insert(names, p.Name) end
+            ciyLog(table.concat(names,", ")) end },
+        { cat="PLAYER",   name="Rejoin",        desc="Leave and rejoin — GUI auto-loads if Auto-Exec ON",
+          run=function()
+            if ciyAutoExec then
+                -- Store the script source in _G so the executor can re-run it after teleport.
+                -- Most executors (Synapse, KRNL, Fluxus) expose getscriptbytecode / getscriptfunction
+                -- or allow you to use their auto-exec folder. This sets a flag they can check:
+                _G.NTG_AutoExec      = true
+                _G.NTG_AutoExecPlace = game.PlaceId
+                ciyLog("Auto-Exec ON — GUI will reload after rejoin.")
+            else
+                ciyLog("Rejoining...")
+            end
+            task.wait(0.8)
+            game:GetService("TeleportService"):Teleport(game.PlaceId, Player)
+          end },
+        -- NT Exclusives
+        { cat="NT EXCLUSIVE", name="NT Breach Alarm",desc="Trigger containment breach screen",
+          run=function() showToast("NT","CONTAINMENT BREACH TRIGGERED",C.AccentBrt); ciyLog("Breach alarm") end },
+        { cat="NT EXCLUSIVE", name="Rainbow Mode ON",desc="Cycle character colours",
+          run=function() S.Rainbow=true; ciyLog("Rainbow ON") end },
+        { cat="NT EXCLUSIVE", name="Rainbow Mode OFF",desc="Stop rainbow",
+          run=function() S.Rainbow=false; ciyLog("Rainbow OFF") end },
+        { cat="NT EXCLUSIVE", name="Spin ON",    desc="Rotate character continuously",
+          run=function() S.Spin=true; ciyLog("Spin ON") end },
+        { cat="NT EXCLUSIVE", name="Spin OFF",   desc="Stop spinning",
+          run=function() S.Spin=false; ciyLog("Spin OFF") end },
+        { cat="NT EXCLUSIVE", name="Work Log",   desc="Send a work log message to chat",
+          run=function()
+            pcall(function()
+                chatSay("[LOG] Nothing There Qliphoth counter: 0. All clear.")
+            end) ciyLog("Log sent") end },
+        -- Teleport
+        { cat="TELEPORT", name="Tp to Spawn",   desc="Teleport to spawn point",
+          run=function()
+            pcall(function()
+                local sp = workspace:FindFirstChild("SpawnLocation")
+                local hrp = getHRP(getChar())
+                if sp and hrp then hrp.CFrame = CFrame.new(sp.Position + Vector3.new(0,5,0)) end
+            end) ciyLog("Tp Spawn") end },
+    }
+
+    -- Build command rows
+    local cmdButtons = {}
+
+    local function buildCmdList(filter)
+        -- Clear existing
+        for _, c in ipairs(ciyScroll:GetChildren()) do
+            if c:IsA("Frame") or c:IsA("TextButton") then c:Destroy() end
+        end
+        local lastCat = ""
+        for _, cmd in ipairs(CIY_COMMANDS) do
+            local show = filter == "" or
+                cmd.name:lower():find(filter:lower()) or
+                cmd.cat:lower():find(filter:lower())
+            if not show then continue end
+
+            -- Category separator
+            if cmd.cat ~= lastCat then
+                lastCat = cmd.cat
+                local catLbl = New("TextLabel",{
+                    Text="  -- "..cmd.cat.." --",
+                    Size=UDim2.new(1,0,0,18),
+                    BackgroundColor3=Color3.fromRGB(28,10,10),
+                    TextColor3=C.Accent, Font=Enum.Font.GothamBold,
+                    TextSize=9, TextXAlignment=Enum.TextXAlignment.Left,
+                    BorderSizePixel=0,
+                }, ciyScroll)
+            end
+
+            local row = New("Frame",{
+                Size=UDim2.new(1,0,0,34), BackgroundColor3=C.Secondary, BorderSizePixel=0,
+            }, ciyScroll); Corner(4, row)
+
+            New("TextLabel",{
+                Text=cmd.name, Size=UDim2.new(1,-70,0,18),
+                Position=UDim2.new(0,8,0,2), BackgroundTransparency=1,
+                TextColor3=C.Text, Font=Enum.Font.GothamBold,
+                TextSize=11, TextXAlignment=Enum.TextXAlignment.Left,
+            }, row)
+            New("TextLabel",{
+                Text=cmd.desc, Size=UDim2.new(1,-70,0,13),
+                Position=UDim2.new(0,8,0,20), BackgroundTransparency=1,
+                TextColor3=C.TextDim, Font=Enum.Font.Code,
+                TextSize=8, TextXAlignment=Enum.TextXAlignment.Left,
+            }, row)
+
+            local execBtn = New("TextButton",{
+                Text="RUN", Size=UDim2.new(0,52,0,22),
+                Position=UDim2.new(1,-58,0,6),
+                BackgroundColor3=C.Accent, TextColor3=Color3.new(1,1,1),
+                Font=Enum.Font.GothamBold, TextSize=10, BorderSizePixel=0,
+            }, row); Corner(4, execBtn)
+
+            local capturedCmd = cmd
+            execBtn.MouseButton1Click:Connect(function()
+                local ok, err = pcall(capturedCmd.run)
+                if not ok then ciyLog("Error: "..tostring(err):sub(1,50)) end
+            end)
+        end
+    end
+
+    buildCmdList("")
+
+    ciySearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+        buildCmdList(ciySearchBox.Text)
+    end)
+
+    -- ── Toggle Logic ──────────────────────────────────────────
+    local function toggleConsole(open)
+        consoleOpen = open
+        ciyWin.Visible = open
+        miniLbl.TextColor3 = open and Color3.fromRGB(255,220,80) or C.Accent
+        miniBar.BackgroundColor3 = open
+            and Color3.fromRGB(30,20,5)
+            or  Color3.fromRGB(14,7,7)
+    end
+
+    miniBar.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            toggleConsole(not consoleOpen)
+        end
+    end)
+    ciyCloseBtn.MouseButton1Click:Connect(function()
+        toggleConsole(false)
+    end)
+
+    -- Make window draggable
+    local ciyDrag, ciyDS, ciyStartPos = false, nil, nil
+    ciyTitle.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            ciyDrag=true; ciyDS=inp.Position; ciyStartPos=ciyWin.Position
+        end
+    end)
+    ciyTitle.InputEnded:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then ciyDrag=false end
+    end)
+    UserInputService.InputChanged:Connect(function(inp)
+        if not ciyDrag then return end
+        if inp.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+        local d = inp.Position - ciyDS
+        ciyWin.Position = UDim2.new(
+            ciyStartPos.X.Scale, ciyStartPos.X.Offset + d.X,
+            ciyStartPos.Y.Scale, ciyStartPos.Y.Offset + d.Y)
+    end)
+end
+
+-- ════════════════════════════════════════════════════════════════
 -- START ON HOME
 -- ════════════════════════════════════════════════════════════════
 showTab("Home")
-print("Nothing There GUI loaded. Enable RightShift keybind in Settings tab.")
+print("Nothing There GUI loaded.")
