@@ -1,0 +1,295 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local Player = Players.LocalPlayer
+
+--==================================================
+-- SETTINGS
+--==================================================
+
+local Radius = 12
+local Height = 3
+local OrbitSpeed = 1.5
+local PullSpeed = 12
+local Enabled = false
+
+--==================================================
+-- GUI
+--==================================================
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "SuperRing"
+Gui.ResetOnSpawn = false
+Gui.Parent = Player:WaitForChild("PlayerGui")
+
+local Main = Instance.new("Frame")
+Main.Size = UDim2.fromOffset(300, 270)
+Main.Position = UDim2.new(0.5, -150, 0.5, -135)
+Main.BackgroundColor3 = Color3.fromRGB(18, 19, 24)
+Main.BorderSizePixel = 0
+Main.Parent = Gui
+
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 12)
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -50, 0, 45)
+Title.Position = UDim2.fromOffset(15, 5)
+Title.BackgroundTransparency = 1
+Title.Text = "SUPER RING"
+Title.TextColor3 = Color3.fromRGB(255,255,255)
+Title.TextSize = 18
+Title.Font = Enum.Font.GothamBold
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Main
+
+local Close = Instance.new("TextButton")
+Close.Size = UDim2.fromOffset(32, 32)
+Close.Position = UDim2.new(1, -42, 0, 10)
+Close.BackgroundColor3 = Color3.fromRGB(45,45,52)
+Close.Text = "×"
+Close.TextColor3 = Color3.fromRGB(255,255,255)
+Close.TextSize = 20
+Close.Font = Enum.Font.GothamBold
+Close.Parent = Main
+
+Instance.new("UICorner", Close).CornerRadius = UDim.new(0, 7)
+
+Close.Activated:Connect(function()
+	Gui.Enabled = false
+	Enabled = false
+end)
+
+--==================================================
+-- BUTTON
+--==================================================
+
+local Toggle = Instance.new("TextButton")
+Toggle.Size = UDim2.new(1, -30, 0, 42)
+Toggle.Position = UDim2.fromOffset(15, 55)
+Toggle.BackgroundColor3 = Color3.fromRGB(50,51,58)
+Toggle.Text = "RING: OFF"
+Toggle.TextColor3 = Color3.fromRGB(255,255,255)
+Toggle.TextSize = 14
+Toggle.Font = Enum.Font.GothamBold
+Toggle.Parent = Main
+
+Instance.new("UICorner", Toggle).CornerRadius = UDim.new(0, 8)
+
+Toggle.Activated:Connect(function()
+	Enabled = not Enabled
+
+	if Enabled then
+		Toggle.Text = "RING: ON"
+		Toggle.BackgroundColor3 = Color3.fromRGB(46,204,113)
+	else
+		Toggle.Text = "RING: OFF"
+		Toggle.BackgroundColor3 = Color3.fromRGB(50,51,58)
+	end
+end)
+
+--==================================================
+-- INPUTS
+--==================================================
+
+local function makeInput(Name, Y, Default)
+	local Label = Instance.new("TextLabel")
+	Label.Size = UDim2.fromOffset(120, 35)
+	Label.Position = UDim2.fromOffset(15, Y)
+	Label.BackgroundTransparency = 1
+	Label.Text = Name
+	Label.TextColor3 = Color3.fromRGB(210,210,215)
+	Label.TextSize = 13
+	Label.Font = Enum.Font.GothamMedium
+	Label.TextXAlignment = Enum.TextXAlignment.Left
+	Label.Parent = Main
+
+	local Box = Instance.new("TextBox")
+	Box.Size = UDim2.fromOffset(125, 35)
+	Box.Position = UDim2.new(1, -140, 0, Y)
+	Box.BackgroundColor3 = Color3.fromRGB(35,36,43)
+	Box.BorderSizePixel = 0
+	Box.Text = tostring(Default)
+	Box.TextColor3 = Color3.fromRGB(255,255,255)
+	Box.TextSize = 13
+	Box.Font = Enum.Font.Gotham
+	Box.ClearTextOnFocus = false
+	Box.Parent = Main
+
+	Instance.new("UICorner", Box).CornerRadius = UDim.new(0, 7)
+
+	return Box
+end
+
+local RadiusBox = makeInput("Radius", 110, Radius)
+local HeightBox = makeInput("Height", 150, Height)
+local SpeedBox = makeInput("Orbit Speed", 190, OrbitSpeed)
+
+local Apply = Instance.new("TextButton")
+Apply.Size = UDim2.new(1, -30, 0, 35)
+Apply.Position = UDim2.fromOffset(15, 230)
+Apply.BackgroundColor3 = Color3.fromRGB(55,110,220)
+Apply.Text = "APPLY"
+Apply.TextColor3 = Color3.fromRGB(255,255,255)
+Apply.TextSize = 13
+Apply.Font = Enum.Font.GothamBold
+Apply.Parent = Main
+
+Instance.new("UICorner", Apply).CornerRadius = UDim.new(0, 7)
+
+Apply.Activated:Connect(function()
+	Radius = tonumber(RadiusBox.Text) or Radius
+	Height = tonumber(HeightBox.Text) or Height
+	OrbitSpeed = tonumber(SpeedBox.Text) or OrbitSpeed
+
+	Radius = math.max(2, Radius)
+	Height = math.max(-20, Height)
+	OrbitSpeed = math.max(0, OrbitSpeed)
+end)
+
+--==================================================
+-- OBJECT COLLECTION
+--==================================================
+
+local Objects = {}
+
+local function isCharacterPart(part)
+	local Model = part:FindFirstAncestorOfClass("Model")
+
+	if not Model then
+		return false
+	end
+
+	return Players:GetPlayerFromCharacter(Model) ~= nil
+end
+
+local function collectObjects()
+	table.clear(Objects)
+
+	for _, Object in ipairs(workspace:GetDescendants()) do
+		if Object:IsA("BasePart")
+			and not Object.Anchored
+			and not isCharacterPart(Object)
+			and Object.CanCollide then
+
+			table.insert(Objects, Object)
+		end
+	end
+end
+
+collectObjects()
+
+workspace.DescendantAdded:Connect(function(Object)
+	if Object:IsA("BasePart")
+		and not Object.Anchored
+		and not isCharacterPart(Object)
+		and Object.CanCollide then
+
+		table.insert(Objects, Object)
+	end
+end)
+
+workspace.DescendantRemoving:Connect(function(Object)
+	for i = #Objects, 1, -1 do
+		if Objects[i] == Object then
+			table.remove(Objects, i)
+		end
+	end
+end)
+
+--==================================================
+-- RING PHYSICS
+--==================================================
+
+local Angle = 0
+
+RunService.Heartbeat:Connect(function(DeltaTime)
+	if not Enabled then
+		return
+	end
+
+	local Character = Player.Character
+
+	if not Character then
+		return
+	end
+
+	local Root = Character:FindFirstChild("HumanoidRootPart")
+
+	if not Root then
+		return
+	end
+
+	Angle += DeltaTime * OrbitSpeed
+
+	local Count = #Objects
+
+	if Count == 0 then
+		return
+	end
+
+	for Index, Part in ipairs(Objects) do
+		if Part
+			and Part.Parent
+			and not Part.Anchored
+			and not isCharacterPart(Part) then
+
+			local ObjectAngle =
+				Angle + ((Index - 1) / Count) * math.pi * 2
+
+			local Target =
+				Root.Position
+				+ Vector3.new(
+					math.cos(ObjectAngle) * Radius,
+					Height,
+					math.sin(ObjectAngle) * Radius
+				)
+
+			local Offset = Target - Part.Position
+
+			Part.AssemblyLinearVelocity =
+				Offset * PullSpeed
+		end
+	end
+end)
+
+--==================================================
+-- DRAGGING
+--==================================================
+
+local Dragging = false
+local DragStart
+local StartPosition
+
+Title.InputBegan:Connect(function(Input)
+	if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+		Dragging = true
+		DragStart = Input.Position
+		StartPosition = Main.Position
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(Input)
+	if not Dragging then
+		return
+	end
+
+	if Input.UserInputType ~= Enum.UserInputType.MouseMovement then
+		return
+	end
+
+	local Delta = Input.Position - DragStart
+
+	Main.Position = UDim2.new(
+		StartPosition.X.Scale,
+		StartPosition.X.Offset + Delta.X,
+		StartPosition.Y.Scale,
+		StartPosition.Y.Offset + Delta.Y
+	)
+end)
+
+UserInputService.InputEnded:Connect(function(Input)
+	if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+		Dragging = false
+	end
+end)
