@@ -1,0 +1,464 @@
+-- Modern Studio Multi-Tool: Draggable, Closeable, Tabs & Automatic Resource Cutoff
+local Players = game:GetService("Players")
+local LogService = game:GetService("LogService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local InsertService = game:GetService("InsertService")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local animator = humanoid:WaitForChild("Animator")
+
+-- State Controls
+local isPanelOpen = true
+local activeTab = "Logger"
+
+-- =============================================================================
+-- 1. BASE SCREEN GRAPHICS SETUP (Semi-Transparent Acrylic Theme)
+-- =============================================================================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "DevSuitePanel"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+-- Main Window
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 360, 0, 420)
+mainFrame.Position = UDim2.new(0.5, -180, 0.5, -210)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+mainFrame.BackgroundTransparency = 0.25 -- Look-through acrylic visual feel
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 10)
+mainCorner.Parent = mainFrame
+
+-- Title bar / Draggable handle zone
+local topBar = Instance.new("Frame")
+topBar.Name = "TopBar"
+topBar.Size = UDim2.new(1, 0, 0, 40)
+topBar.BackgroundTransparency = 1
+topBar.Parent = mainFrame
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -50, 1, 0)
+titleLabel.Position = UDim2.new(0, 15, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "Studio Asset Developer Tool v2"
+titleLabel.TextColor3 = Color3.fromRGB(240, 240, 250)
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.TextSize = 16
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = topBar
+
+-- Close Button
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 0, 30)
+closeBtn.Position = UDim2.new(1, -35, 0, 5)
+closeBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+closeBtn.BackgroundTransparency = 0.2
+closeBtn.Text = "X"
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.Font = Enum.Font.SourceSansBold
+closeBtn.TextSize = 14
+closeBtn.Parent = topBar
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 6)
+closeCorner.Parent = closeBtn
+
+-- Toggle Hotkey Button (Floating anchor to reopen if closed)
+local openToggleBtn = Instance.new("TextButton")
+openToggleBtn.Size = UDim2.new(0, 100, 0, 35)
+openToggleBtn.Position = UDim2.new(0, 20, 0, 20)
+openToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+openToggleBtn.BackgroundTransparency = 0.3
+openToggleBtn.Text = "Open Panel"
+openToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+openToggleBtn.Font = Enum.Font.SourceSansBold
+openToggleBtn.TextSize = 14
+openToggleBtn.Visible = false
+openToggleBtn.Parent = screenGui
+
+local openCorner = Instance.new("UICorner")
+openCorner.CornerRadius = UDim.new(0, 6)
+openCorner.Parent = openToggleBtn
+
+-- =============================================================================
+-- 2. DRAGGING ENGINE CODES
+-- =============================================================================
+local dragging, dragInput, dragStart, startPos
+local function update(input)
+	local delta = input.Position - dragStart
+	mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+end
+
+topBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		dragging = true
+		dragStart = input.Position
+		startPos = mainFrame.Position
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then dragging = false end
+		end)
+	end
+end)
+
+topBar.InputChanged:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+		dragInput = input
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if input == dragInput and dragging then update(input) end
+end)
+
+-- =============================================================================
+-- 3. NAVIGATION TAB SELECTORS
+-- =============================================================================
+local tabContainer = Instance.new("Frame")
+tabContainer.Size = UDim2.new(1, -20, 0, 35)
+tabContainer.Position = UDim2.new(0, 10, 0, 45)
+tabContainer.BackgroundTransparency = 1
+tabContainer.Parent = mainFrame
+
+local loggerTabBtn = Instance.new("TextButton")
+loggerTabBtn.Size = UDim2.new(0.5, -5, 1, 0)
+loggerTabBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 240)
+loggerTabBtn.Text = "Live Logger"
+loggerTabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+loggerTabBtn.Font = Enum.Font.SourceSansBold
+loggerTabBtn.TextSize = 14
+loggerTabBtn.Parent = tabContainer
+
+local logTabCorner = Instance.new("UICorner")
+logTabCorner.CornerRadius = UDim.new(0, 6)
+logTabCorner.Parent = loggerTabBtn
+
+local bundleTabBtn = Instance.new("TextButton")
+bundleTabBtn.Size = UDim2.new(0.5, -5, 1, 0)
+bundleTabBtn.Position = UDim2.new(0.5, 5, 0, 0)
+bundleTabBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+bundleTabBtn.Text = "Bundle Unpacker"
+bundleTabBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+bundleTabBtn.Font = Enum.Font.SourceSansBold
+bundleTabBtn.TextSize = 14
+bundleTabBtn.Parent = tabContainer
+
+local bundleTabCorner = Instance.new("UICorner")
+bundleTabCorner.CornerRadius = UDim.new(0, 6)
+bundleTabCorner.Parent = bundleTabBtn
+
+-- Pages Setup
+local loggerPage = Instance.new("Frame")
+loggerPage.Size = UDim2.new(1, 0, 1, -90)
+loggerPage.Position = UDim2.new(0, 0, 0, 90)
+loggerPage.BackgroundTransparency = 1
+loggerPage.Parent = mainFrame
+
+local bundlePage = Instance.new("Frame")
+bundlePage.Size = UDim2.new(1, 0, 1, -90)
+bundlePage.Position = UDim2.new(0, 0, 0, 90)
+bundlePage.BackgroundTransparency = 1
+bundlePage.Visible = false
+bundlePage.Parent = mainFrame
+
+local function switchTab(tabName)
+	activeTab = tabName
+	if tabName == "Logger" then
+		loggerTabBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 240)
+		loggerTabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+		bundleTabBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+		bundleTabBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+		loggerPage.Visible = true
+		bundlePage.Visible = false
+	else
+		bundleTabBtn.BackgroundColor3 = Color3.fromRGB(50, 120, 240)
+		bundleTabBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+		loggerTabBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+		loggerTabBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
+		loggerPage.Visible = false
+		bundlePage.Visible = true
+	end
+end
+
+loggerTabBtn.MouseButton1Click:Connect(function() switchTab("Logger") end)
+bundleTabBtn.MouseButton1Click:Connect(function() switchTab("Bundle") end)
+
+-- =============================================================================
+-- 4. TAB 1 DESIGN: LIVE TRACK LOG AREA
+-- =============================================================================
+local bundleInput = Instance.new("TextBox")
+bundleInput.Size = UDim2.new(0, 220, 0, 35)
+bundleInput.Position = UDim2.new(0, 15, 0, 5)
+bundleInput.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+bundleInput.BackgroundTransparency = 0.2
+bundleInput.PlaceholderText = "Wear Bundle/Outfit ID..."
+bundleInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+bundleInput.Font = Enum.Font.SourceSans
+bundleInput.TextSize = 14
+bundleInput.Parent = loggerPage
+
+local binCorner = Instance.new("UICorner")
+binCorner.CornerRadius = UDim.new(0, 6)
+binCorner.Parent = bundleInput
+
+local equipButton = Instance.new("TextButton")
+equipButton.Size = UDim2.new(0, 95, 0, 35)
+equipButton.Position = UDim2.new(0, 245, 0, 5)
+equipButton.BackgroundColor3 = Color3.fromRGB(0, 160, 100)
+equipButton.Text = "Equip Outfit"
+equipButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+equipButton.Font = Enum.Font.SourceSansBold
+equipButton.TextSize = 14
+equipButton.Parent = loggerPage
+
+local eqCorner = Instance.new("UICorner")
+eqCorner.CornerRadius = UDim.new(0, 6)
+eqCorner.Parent = equipButton
+
+local logScrollFrame = Instance.new("ScrollingFrame")
+logScrollFrame.Size = UDim2.new(1, -30, 1, -55)
+logScrollFrame.Position = UDim2.new(0, 15, 0, 45)
+logScrollFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+logScrollFrame.BackgroundTransparency = 0.4
+logScrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+logScrollFrame.ScrollBarThickness = 6
+logScrollFrame.Parent = loggerPage
+
+local lsfCorner = Instance.new("UICorner")
+lsfCorner.CornerRadius = UDim.new(0, 6)
+lsfCorner.Parent = logScrollFrame
+
+local logListLayout = Instance.new("UIListLayout")
+logListLayout.Padding = UDim.new(0, 4)
+logListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+logListLayout.Parent = logScrollFrame
+
+-- Outfit application mechanism
+equipButton.MouseButton1Click:Connect(function()
+	local id = tonumber(bundleInput.Text)
+	if not id then bundleInput.Text = "Bad ID!"; task.wait(1); bundleInput.Text = ""; return end
+	local s, desc = pcall(function() return Players:GetHumanoidDescriptionFromOutfitId(id) end)
+	if s and desc and player.Character then
+		player.Character:WaitForChild("Humanoid"):ApplyDescription(desc)
+	else
+		bundleInput.Text = "Load Error!"; task.wait(1); bundleInput.Text = ""
+	end
+end)
+
+-- Generic copy element builder
+local function buildCopyRow(name, assetId, targetFrame)
+	local rowBtn = Instance.new("TextButton")
+	rowBtn.Size = UDim2.new(1, -5, 0, 32)
+	rowBtn.Text = "  " .. name .. " \n  ID: " .. assetId
+	rowBtn.TextXAlignment = Enum.TextXAlignment.Left
+	rowBtn.TextColor3 = Color3.fromRGB(210, 210, 220)
+	rowBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+	rowBtn.BackgroundTransparency = 0.3
+		rowBtn.Font = Enum.Font.SourceSans
+	rowBtn.TextSize = 13
+	rowBtn.Parent = targetFrame
+
+	local rc = Instance.new("UICorner")
+	rc.CornerRadius = UDim.new(0, 4)
+	rc.Parent = rowBtn
+
+	rowBtn.MouseButton1Click:Connect(function()
+		local numOnly = string.match(assetId, "%d+") or assetId
+		LogService:RequestSetClipboard(numOnly)
+		rowBtn.Text = "  COPIED TO CLIPBOARD!"
+		rowBtn.TextColor3 = Color3.fromRGB(50, 255, 130)
+		task.wait(0.8)
+		rowBtn.TextColor3 = Color3.fromRGB(210, 210, 220)
+		rowBtn.Text = "  " .. name .. " \n  ID: " .. assetId
+	end)
+end
+
+-- Track intercept script with active UI visual state checking cutoff rules
+local loggedMap = {}
+
+local function linkAnimator(targetAnimator)
+	targetAnimator.AnimationPlayed:Connect(function(track)
+		-- Safety check: Hard stops writing data if panel is hidden or active tab switched
+		if not isPanelOpen or activeTab ~= "Logger" then
+			return
+		end
+
+		local anim = track.Animation
+
+		if anim and anim.AnimationId then
+			local pathId = anim.AnimationId
+
+			if not loggedMap[pathId] then
+				loggedMap[pathId] = true
+				buildCopyRow(track.Name or "Unnamed", pathId, logScrollFrame)
+			end
+		end
+	end)
+end
+
+linkAnimator(animator)
+
+player.CharacterAdded:Connect(function(char)
+	linkAnimator(char:WaitForChild("Humanoid"):WaitForChild("Animator"))
+end)
+
+-- =============================================================================
+-- 5. TAB 2 DESIGN: BUNDLE UNPACKER (Extract items straight out of Packs)
+-- =============================================================================
+
+local bundleIdInput = Instance.new("TextBox")
+bundleIdInput.Size = UDim2.new(0, 220, 0, 35)
+bundleIdInput.Position = UDim2.new(0, 15, 0, 5)
+bundleIdInput.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
+bundleIdInput.BackgroundTransparency = 0.2
+bundleIdInput.PlaceholderText = "Paste Bundle ID to extract anims..."
+bundleIdInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+bundleIdInput.Font = Enum.Font.SourceSans
+bundleIdInput.TextSize = 14
+bundleIdInput.Parent = bundlePage
+
+local bIdCorner = Instance.new("UICorner")
+bIdCorner.CornerRadius = UDim.new(0, 6)
+bIdCorner.Parent = bundleIdInput
+
+local unpackButton = Instance.new("TextButton")
+unpackButton.Size = UDim2.new(0, 95, 0, 35)
+unpackButton.Position = UDim2.new(0, 245, 0, 5)
+unpackButton.BackgroundColor3 = Color3.fromRGB(160, 50, 160)
+unpackButton.Text = "Extract IDs"
+unpackButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+unpackButton.Font = Enum.Font.SourceSansBold
+unpackButton.TextSize = 14
+unpackButton.Parent = bundlePage
+
+local upCorner = Instance.new("UICorner")
+upCorner.CornerRadius = UDim.new(0, 6)
+upCorner.Parent = unpackButton
+
+local unpackScrollFrame = Instance.new("ScrollingFrame")
+unpackScrollFrame.Size = UDim2.new(1, -30, 1, -55)
+unpackScrollFrame.Position = UDim2.new(0, 15, 0, 45)
+unpackScrollFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+unpackScrollFrame.BackgroundTransparency = 0.4
+unpackScrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+unpackScrollFrame.ScrollBarThickness = 6
+unpackScrollFrame.Parent = bundlePage
+
+local usfCorner = Instance.new("UICorner")
+usfCorner.CornerRadius = UDim.new(0, 6)
+usfCorner.Parent = unpackScrollFrame
+
+local unpackListLayout = Instance.new("UIListLayout")
+unpackListLayout.Padding = UDim.new(0, 4)
+unpackListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+unpackListLayout.Parent = unpackScrollFrame
+
+-- Localized bundle unpacking logic via InsertService configuration structures
+unpackButton.MouseButton1Click:Connect(function()
+	local targetBundleId = tonumber(bundleIdInput.Text)
+
+	if not targetBundleId then
+		bundleIdInput.Text = "Invalid!"
+		task.wait(1)
+		bundleIdInput.Text = ""
+		return
+	end
+
+	unpackButton.Text = "Extracting..."
+	unpackButton.Active = false
+
+	-- Clear past rows from unpacking dashboard feed
+	for _, child in ipairs(unpackScrollFrame:GetChildren()) do
+		if child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+
+	-- Note: InsertService:LoadAsset requires ownership rights or specific Studio runtime settings.
+	-- We pull configurations based on structural descendants found within asset descriptions.
+	local success, assetModel = pcall(function()
+		return InsertService:LoadAsset(targetBundleId)
+	end)
+
+	local foundAnims = false
+
+	if success and assetModel then
+		for _, descendant in ipairs(assetModel:GetDescendants()) do
+			if descendant:IsA("Animation") then
+				foundAnims = true
+				buildCopyRow(
+					descendant.Name,
+					descendant.AnimationId,
+					unpackScrollFrame
+				)
+			end
+		end
+
+		assetModel:Destroy()
+	end
+
+	-- Fallback structural search utilizing description lookups if direct model unpacking isn't cleared
+	if not foundAnims then
+		local s, desc = pcall(function()
+			return Players:GetHumanoidDescriptionFromOutfitId(targetBundleId)
+		end)
+
+		if s and desc then
+			local properties = {
+				"ClimbAnimation",
+				"FallAnimation",
+				"IdleAnimation",
+				"JumpAnimation",
+				"RunAnimation",
+				"SwimAnimation",
+				"WalkAnimation"
+			}
+
+			for _, prop in ipairs(properties) do
+				pcall(function()
+					local val = desc[prop]
+
+					if val and val ~= 0 then
+						foundAnims = true
+						buildCopyRow(
+							prop,
+							"rbxassetid://" .. tostring(val),
+							unpackScrollFrame
+						)
+					end
+				end)
+			end
+		end
+	end
+
+	if not foundAnims then
+		bundleIdInput.Text = "No Anims Found!"
+		task.wait(1.5)
+		bundleIdInput.Text = ""
+	end
+
+	unpackButton.Text = "Extract IDs"
+	unpackButton.Active = true
+end)
+
+-- =============================================================================
+-- 6. VISIBILITY DISPLAY CONTROL SWITCHES (The Cutoff Switch System)
+-- =============================================================================
+
+closeBtn.MouseButton1Click:Connect(function()
+	isPanelOpen = false -- This flag stops the live logging code immediately
+	mainFrame.Visible = false
+	openToggleBtn.Visible = true
+end)
+
+openToggleBtn.MouseButton1Click:Connect(function()
+	isPanelOpen = true -- Resumes active listener operations
+	mainFrame.Visible = true
+	openToggleBtn.Visible = false
+end)
