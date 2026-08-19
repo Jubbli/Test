@@ -3,20 +3,13 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Player = Players.LocalPlayer
-
---==================================================
--- SETTINGS
---==================================================
-
+-- (SETTINGS)
 local Radius = 12
 local Height = 3
 local OrbitSpeed = 1.5
 local PullSpeed = 12
 local Enabled = false
 
---==================================================
--- GUI
---==================================================
 
 local Gui = Instance.new("ScreenGui")
 Gui.Name = "SuperRing"
@@ -60,9 +53,7 @@ Close.Activated:Connect(function()
 	Enabled = false
 end)
 
---==================================================
--- BUTTON
---==================================================
+-- (TOGGLE)
 
 local Toggle = Instance.new("TextButton")
 Toggle.Size = UDim2.new(1, -30, 0, 42)
@@ -87,10 +78,6 @@ Toggle.Activated:Connect(function()
 		Toggle.BackgroundColor3 = Color3.fromRGB(50,51,58)
 	end
 end)
-
---==================================================
--- INPUTS
---==================================================
 
 local function makeInput(Name, Y, Default)
 	local Label = Instance.new("TextLabel")
@@ -147,9 +134,7 @@ Apply.Activated:Connect(function()
 	OrbitSpeed = math.max(0, OrbitSpeed)
 end)
 
---==================================================
--- OBJECT COLLECTION
---==================================================
+-- the items it picks up
 
 local Objects = {}
 
@@ -197,9 +182,7 @@ workspace.DescendantRemoving:Connect(function(Object)
 	end
 end)
 
---==================================================
--- RING PHYSICS
---==================================================
+-- physics
 
 local Angle = 0
 
@@ -252,10 +235,6 @@ RunService.Heartbeat:Connect(function(DeltaTime)
 		end
 	end
 end)
-
---==================================================
--- DRAGGING
---==================================================
 
 local Dragging = false
 local DragStart
