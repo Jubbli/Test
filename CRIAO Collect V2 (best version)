@@ -1,0 +1,1369 @@
+--// C.R.I.A.O COLLECTOR v2
+--// LocalScript
+--// For your own Roblox game / test place.
+--
+-- FEATURES
+-- • Individual item selection for COLLECT ONCE
+-- • Rarity-filtered live object list
+-- • AUTO rarity collector
+-- • REFRESH
+-- • Noclip while collecting
+-- • Underground movement
+-- • Temporary pickup hitbox expansion
+-- • Exact original-position restoration
+-- • Low-frequency object scanning
+-- • No constant Explorer/Dex-style scanning
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
+
+--==================================================
+-- CONFIG
+--==================================================
+
+local CONFIG = {
+	MoveTime = 0.012,
+
+	-- How far underneath the collectible to position yourself.
+	UnderMapOffset = 7,
+
+	-- Extra distance around the collectible to test.
+	PickupRadius = 18,
+
+	-- Temporary client-side expansion.
+	HitboxMultiplier = 3,
+
+	-- Delay between pickup attempts.
+	PickupDelay = 0.012,
+
+	-- AUTO loop.
+	AutoInterval = 0.06,
+
+	-- UI updates.
+	UIInterval = 0.25,
+
+	-- How often a failed object is allowed to be retried.
+	RetryDelay = 0.4,
+}
+
+local RARITIES = {
+	"Common",
+	"Rare",
+	"Epic",
+	"Legendary",
+	"Mythic",
+	"Secret",
+	"Relic",
+	"Anomalous",
+}
+
+local RarityLookup = {}
+
+for _, rarity in ipairs(RARITIES) do
+	RarityLookup[string.lower(rarity)] = rarity
+end
+
+--==================================================
+-- REMOTE
+--==================================================
+
+local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
+local Functions = Remotes and Remotes:FindFirstChild("Functions")
+local PickupRemote = Functions and Functions:FindFirstChild("RequestObjectPickup")
+
+--==================================================
+-- CHARACTER
+--==================================================
+
+local Character
+local Root
+local Humanoid
+
+local function updateCharacter()
+	Character = Player.Character
+
+	if not Character then
+		Root = nil
+		Humanoid = nil
+		return
+	end
+
+	Root =
+		Character:FindFirstChild("HumanoidRootPart")
+		or Character.PrimaryPart
+
+	Humanoid = Character:FindFirstChildOfClass("Humanoid")
+end
+
+updateCharacter()
+
+Player.CharacterAdded:Connect(function()
+	task.wait(0.2)
+	updateCharacter()
+end)
+
+--==================================================
+-- GUI CLEANUP
+--==================================================
+
+local Existing = PlayerGui:FindFirstChild("CRIAOCollector")
+
+if Existing then
+	Existing:Destroy()
+end
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "CRIAOCollector"
+Gui.ResetOnSpawn = false
+Gui.IgnoreGuiInset = true
+Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+Gui.Parent = PlayerGui
+
+--==================================================
+-- MAIN WINDOW
+--==================================================
+
+local Main = Instance.new("Frame")
+Main.Name = "Main"
+Main.Size = UDim2.fromOffset(330, 470)
+Main.Position = UDim2.new(0, 22, 0.5, -235)
+Main.BackgroundColor3 = Color3.fromRGB(12, 15, 22)
+Main.BackgroundTransparency = 0.07
+Main.BorderSizePixel = 0
+Main.Parent = Gui
+
+local Corner = Instance.new("UICorner")
+Corner.CornerRadius = UDim.new(0, 12)
+Corner.Parent = Main
+
+local Border = Instance.new("UIStroke")
+Border.Color = Color3.fromRGB(80, 96, 125)
+Border.Transparency = 0.35
+Border.Thickness = 1
+Border.Parent = Main
+
+--==================================================
+-- DRAGGING
+--==================================================
+
+local Dragging = false
+local DragStart
+local StartPosition
+
+Main.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		Dragging = true
+		DragStart = input.Position
+		StartPosition = Main.Position
+
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				Dragging = false
+			end
+		end)
+	end
+end)
+
+Main.InputChanged:Connect(function(input)
+	if not Dragging then
+		return
+	end
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		local Delta = input.Position - DragStart
+
+		Main.Position = UDim2.new(
+			StartPosition.X.Scale,
+			StartPosition.X.Offset + Delta.X,
+			StartPosition.Y.Scale,
+			StartPosition.Y.Offset + Delta.Y
+		)
+	end
+end)
+
+--==================================================
+-- HEADER
+--==================================================
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -65, 0, 32)
+Title.Position = UDim2.fromOffset(14, 7)
+Title.BackgroundTransparency = 1
+Title.Text = "C.R.I.A.O  //  COLLECTOR"
+Title.TextColor3 = Color3.fromRGB(235, 240, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 14
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Main
+
+local Close = Instance.new("TextButton")
+Close.Size = UDim2.fromOffset(30, 28)
+Close.Position = UDim2.new(1, -39, 0, 8)
+Close.BackgroundTransparency = 1
+Close.Text = "×"
+Close.TextColor3 = Color3.fromRGB(185, 195, 215)
+Close.Font = Enum.Font.Gotham
+Close.TextSize = 22
+Close.Parent = Main
+
+Close.MouseButton1Click:Connect(function()
+	Gui.Enabled = false
+end)
+
+local Status = Instance.new("TextLabel")
+Status.Size = UDim2.new(1, -28, 0, 19)
+Status.Position = UDim2.fromOffset(14, 36)
+Status.BackgroundTransparency = 1
+Status.Text = "READY"
+Status.TextColor3 = Color3.fromRGB(125, 140, 165)
+Status.Font = Enum.Font.Gotham
+Status.TextSize = 10
+Status.TextXAlignment = Enum.TextXAlignment.Left
+Status.Parent = Main
+
+--==================================================
+-- DATA
+--==================================================
+
+local IndexRarity = {}
+local LiveObjects = {}
+
+local SelectedRarity = "Secret"
+local SelectedItem = nil
+
+local AutoEnabled = false
+local Collecting = false
+
+local OriginalCFrame = nil
+
+--==================================================
+-- HELPERS
+--==================================================
+
+local function normalizeRarity(value)
+	if typeof(value) ~= "string" then
+		return nil
+	end
+
+	local cleaned = value
+		:gsub("%s+", "")
+		:gsub("_", "")
+		:lower()
+
+	if cleaned == "relics" then
+		cleaned = "relic"
+	end
+
+	return RarityLookup[cleaned]
+end
+
+local function getPosition(object)
+	if not object or not object.Parent then
+		return nil
+	end
+
+	if object:IsA("BasePart") then
+		return object.Position
+	end
+
+	if object:IsA("Model") then
+		return object:GetPivot().Position
+	end
+
+	local part = object:FindFirstChildWhichIsA("BasePart", true)
+
+	return part and part.Position
+end
+
+--==================================================
+-- INDEX SCANNER
+--==================================================
+
+local function registerSection(section)
+	if not section then
+		return
+	end
+
+	local rarity = normalizeRarity(
+		section.Name:gsub("^Section_", "")
+	)
+
+	if not rarity then
+		return
+	end
+
+	for _, descendant in ipairs(section:GetDescendants()) do
+		if descendant.Name:sub(1, 5) == "Slot_" then
+			local itemName = descendant.Name:sub(6)
+
+			if itemName ~= "" then
+				IndexRarity[itemName] = rarity
+			end
+
+			for _, uiObject in ipairs(descendant:GetDescendants()) do
+				if uiObject:IsA("TextLabel")
+					or uiObject:IsA("TextButton") then
+
+					local textValue = uiObject.Text
+
+					if typeof(textValue) == "string"
+						and textValue ~= ""
+						and #textValue < 100 then
+
+						IndexRarity[textValue] = rarity
+					end
+				end
+			end
+		end
+	end
+end
+
+local function scanIndex(root)
+	if not root then
+		return
+	end
+
+	for _, descendant in ipairs(root:GetDescendants()) do
+		if descendant.Name:match("^Section_") then
+			registerSection(descendant)
+		end
+	end
+end
+
+local function rebuildIndex()
+	table.clear(IndexRarity)
+
+	scanIndex(PlayerGui)
+
+	print("[C.R.I.A.O] Index rebuilt:", #IndexRarity)
+end
+
+rebuildIndex()
+
+--==================================================
+-- RARITY DETECTION
+--==================================================
+
+local function getAttributeRarity(object)
+	local names = {
+		"Rarity",
+		"RarityName",
+		"RarityType",
+		"ObjectRarity",
+		"IndexRarity",
+		"Tier",
+		"TierName",
+		"ClaimTier",
+	}
+
+	for _, attributeName in ipairs(names) do
+		local value = object:GetAttribute(attributeName)
+
+		local rarity = normalizeRarity(value)
+
+		if rarity then
+			return rarity
+		end
+	end
+
+	return nil
+end
+
+local function getValueRarity(object)
+	local names = {
+		"Rarity",
+		"RarityName",
+		"RarityType",
+		"ObjectRarity",
+		"Tier",
+		"TierName",
+	}
+
+	for _, name in ipairs(names) do
+		local valueObject = object:FindFirstChild(name, true)
+
+		if valueObject then
+			local value
+
+			pcall(function()
+				value = valueObject.Value
+			end)
+
+			local rarity = normalizeRarity(value)
+
+			if rarity then
+				return rarity
+			end
+		end
+	end
+
+	return nil
+end
+
+local function getRarity(object)
+	if not object then
+		return nil
+	end
+
+	local rarity = getAttributeRarity(object)
+
+	if rarity then
+		return rarity
+	end
+
+	rarity = getValueRarity(object)
+
+	if rarity then
+		return rarity
+	end
+
+	rarity = IndexRarity[object.Name]
+
+	if rarity then
+		return rarity
+	end
+
+	local stripped = object.Name
+	stripped = stripped:gsub("^Object_", "")
+	stripped = stripped:gsub("^Spawned_", "")
+	stripped = stripped:gsub("^Item_", "")
+
+	rarity = IndexRarity[stripped]
+
+	if rarity then
+		return rarity
+	end
+
+	return nil
+end
+
+--==================================================
+-- LIVE OBJECT CACHE
+--==================================================
+
+local SpawnedObjects = workspace:FindFirstChild("SpawnedObjects")
+
+local function registerObject(object)
+	if not object or not object.Parent then
+		return
+	end
+
+	local rarity = getRarity(object)
+
+	if rarity then
+		LiveObjects[object] = {
+			Object = object,
+			Rarity = rarity,
+			LastAttempt = 0,
+		}
+	else
+		LiveObjects[object] = nil
+	end
+end
+
+local function rebuildObjects()
+	table.clear(LiveObjects)
+
+	SpawnedObjects = workspace:FindFirstChild("SpawnedObjects")
+
+	if not SpawnedObjects then
+		Status.Text = "SpawnedObjects NOT FOUND"
+		return
+	end
+
+	for _, object in ipairs(SpawnedObjects:GetChildren()) do
+		registerObject(object)
+	end
+
+	Status.Text = "READY  •  OBJECT CACHE REFRESHED"
+end
+
+rebuildObjects()
+
+local AddedConnection
+local RemovedConnection
+
+local function connectObjectFolder()
+	if AddedConnection then
+		AddedConnection:Disconnect()
+	end
+
+	if RemovedConnection then
+		RemovedConnection:Disconnect()
+	end
+
+	if not SpawnedObjects then
+		return
+	end
+
+	AddedConnection = SpawnedObjects.ChildAdded:Connect(function(object)
+		task.defer(function()
+			registerObject(object)
+		end)
+	end)
+
+	RemovedConnection = SpawnedObjects.ChildRemoved:Connect(function(object)
+		LiveObjects[object] = nil
+
+		if SelectedItem == object then
+			SelectedItem = nil
+		end
+	end)
+end
+
+connectObjectFolder()
+
+workspace.ChildAdded:Connect(function(child)
+	if child.Name == "SpawnedObjects" then
+		SpawnedObjects = child
+		rebuildObjects()
+		connectObjectFolder()
+	end
+end)
+
+--==================================================
+-- BUTTON CREATOR
+--==================================================
+
+local function button(parent, text, position, size)
+	local b = Instance.new("TextButton")
+
+	b.Size = size
+	b.Position = position
+	b.BackgroundColor3 = Color3.fromRGB(24, 29, 40)
+	b.BackgroundTransparency = 0.08
+	b.BorderSizePixel = 0
+	b.Text = text
+	b.TextColor3 = Color3.fromRGB(220, 228, 242)
+	b.TextSize = 10
+	b.Font = Enum.Font.GothamMedium
+	b.AutoButtonColor = false
+	b.Parent = parent
+
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 7)
+	c.Parent = b
+
+	local s = Instance.new("UIStroke")
+	s.Color = Color3.fromRGB(68, 80, 103)
+	s.Transparency = 0.4
+	s.Parent = b
+
+	return b
+end
+
+--==================================================
+-- RARITY FILTER
+--==================================================
+
+local RarityButton = button(
+	Main,
+	"RARITY: " .. SelectedRarity .. "  ▾",
+	UDim2.fromOffset(14, 61),
+	UDim2.new(1, -28, 0, 32)
+)
+
+local RarityPanel = Instance.new("Frame")
+RarityPanel.Size = UDim2.new(1, -28, 0, 170)
+RarityPanel.Position = UDim2.fromOffset(14, 96)
+RarityPanel.BackgroundColor3 = Color3.fromRGB(15, 18, 26)
+RarityPanel.BackgroundTransparency = 0.02
+RarityPanel.BorderSizePixel = 0
+RarityPanel.Visible = true
+RarityPanel.Parent = Main
+
+local RPCorner = Instance.new("UICorner")
+RPCorner.CornerRadius = UDim.new(0, 8)
+RPCorner.Parent = RarityPanel
+
+local RPLayout = Instance.new("UIListLayout")
+RPLayout.Padding = UDim.new(0, 3)
+RPLayout.Parent = RarityPanel
+
+local RPPadding = Instance.new("UIPadding")
+RPPadding.PaddingTop = UDim.new(0, 5)
+RPPadding.PaddingLeft = UDim.new(0, 5)
+RPPadding.PaddingRight = UDim.new(0, 5)
+RPPadding.Parent = RarityPanel
+
+local RarityButtons = {}
+
+--==================================================
+-- COUNT OBJECTS
+--==================================================
+
+local function countObjects(rarity)
+	local count = 0
+
+	for object, info in pairs(LiveObjects) do
+		if object
+			and object.Parent
+			and info
+			and info.Rarity == rarity then
+
+			count += 1
+		end
+	end
+
+	return count
+end
+
+--==================================================
+-- ITEM LIST
+--==================================================
+
+local ItemPanel = Instance.new("ScrollingFrame")
+ItemPanel.Name = "ItemPanel"
+ItemPanel.Size = UDim2.new(1, -28, 0, 120)
+ItemPanel.Position = UDim2.fromOffset(14, 274)
+ItemPanel.BackgroundColor3 = Color3.fromRGB(15, 18, 26)
+ItemPanel.BackgroundTransparency = 0.04
+ItemPanel.BorderSizePixel = 0
+ItemPanel.ScrollBarThickness = 3
+ItemPanel.CanvasSize = UDim2.new()
+ItemPanel.AutomaticCanvasSize = Enum.AutomaticSize.Y
+ItemPanel.Parent = Main
+
+local IPCorner = Instance.new("UICorner")
+IPCorner.CornerRadius = UDim.new(0, 8)
+IPCorner.Parent = ItemPanel
+
+local IPLayout = Instance.new("UIListLayout")
+IPLayout.Padding = UDim.new(0, 3)
+IPLayout.Parent = ItemPanel
+
+local IPPadding = Instance.new("UIPadding")
+IPPadding.PaddingTop = UDim.new(0, 5)
+IPPadding.PaddingLeft = UDim.new(0, 5)
+IPPadding.PaddingRight = UDim.new(0, 5)
+IPPadding.PaddingBottom = UDim.new(0, 5)
+IPPadding.Parent = ItemPanel
+
+local ItemButtons = {}
+
+local function clearItemButtons()
+	for _, child in ipairs(ItemPanel:GetChildren()) do
+		if child:IsA("TextButton") then
+			child:Destroy()
+		end
+	end
+
+	table.clear(ItemButtons)
+end
+
+local function getFilteredItems()
+	local items = {}
+
+	for object, info in pairs(LiveObjects) do
+		if object
+			and object.Parent
+			and info
+			and info.Rarity == SelectedRarity then
+
+			table.insert(items, object)
+		end
+	end
+
+	table.sort(items, function(a, b)
+		return a.Name:lower() < b.Name:lower()
+	end)
+
+	return items
+end
+
+local function rebuildItemList()
+	clearItemButtons()
+
+	local items = getFilteredItems()
+
+	if SelectedItem and (
+		not SelectedItem.Parent
+		or not LiveObjects[SelectedItem]
+		or LiveObjects[SelectedItem].Rarity ~= SelectedRarity
+	) then
+		SelectedItem = nil
+	end
+
+	for _, object in ipairs(items) do
+		local isSelected = object == SelectedItem
+
+		local b = button(
+			ItemPanel,
+			(isSelected and "●  " or "○  ")
+				.. object.Name,
+			UDim2.fromOffset(0, 0),
+			UDim2.new(1, -10, 0, 25)
+		)
+
+		ItemButtons[object] = b
+
+		b.MouseButton1Click:Connect(function()
+			SelectedItem = object
+			rebuildItemList()
+
+			Status.Text =
+				"TARGET: "
+				.. object.Name
+				.. "  •  "
+				.. SelectedRarity
+		end)
+	end
+
+	if #items == 0 then
+		local empty = Instance.new("TextLabel")
+
+		empty.Size = UDim2.new(1, -10, 0, 25)
+		empty.BackgroundTransparency = 1
+		empty.Text = "NO LIVE OBJECTS FOR THIS RARITY"
+		empty.TextColor3 = Color3.fromRGB(100, 112, 135)
+		empty.Font = Enum.Font.Gotham
+		empty.TextSize = 9
+		empty.Parent = ItemPanel
+	end
+end
+
+--==================================================
+-- RARITY BUTTONS
+--==================================================
+
+for _, rarity in ipairs(RARITIES) do
+	local b = button(
+		RarityPanel,
+		rarity,
+		UDim2.fromOffset(0, 0),
+		UDim2.new(1, -10, 0, 17)
+	)
+
+	RarityButtons[rarity] = b
+
+	b.MouseButton1Click:Connect(function()
+		SelectedRarity = rarity
+		SelectedItem = nil
+
+		RarityPanel.Visible = false
+		RarityButton.Text = "RARITY: " .. rarity .. "  ▾"
+
+		rebuildItemList()
+
+		Status.Text =
+			rarity
+			.. " FILTER  •  "
+			.. tostring(countObjects(rarity))
+			.. " LIVE"
+	end)
+end
+
+RarityButton.MouseButton1Click:Connect(function()
+	RarityPanel.Visible = not RarityPanel.Visible
+
+	RarityButton.Text =
+		"RARITY: "
+		.. SelectedRarity
+		.. (RarityPanel.Visible and "  ▴" or "  ▾")
+end)
+
+--==================================================
+-- ITEM LABEL
+--==================================================
+
+local ItemLabel = Instance.new("TextLabel")
+ItemLabel.Size = UDim2.new(1, -28, 0, 18)
+ItemLabel.Position = UDim2.fromOffset(14, 253)
+ItemLabel.BackgroundTransparency = 1
+ItemLabel.Text = "LIVE ITEMS  //  " .. SelectedRarity
+ItemLabel.TextColor3 = Color3.fromRGB(145, 158, 182)
+ItemLabel.Font = Enum.Font.GothamBold
+ItemLabel.TextSize = 9
+ItemLabel.TextXAlignment = Enum.TextXAlignment.Left
+ItemLabel.Parent = Main
+
+--==================================================
+-- ACTION BUTTONS
+--==================================================
+
+local CollectOnce = button(
+	Main,
+	"COLLECT SELECTED",
+	UDim2.fromOffset(14, 405),
+	UDim2.new(0.58, -18, 0, 34)
+)
+
+local Auto = button(
+	Main,
+	"AUTO  OFF",
+	UDim2.new(0.58, 3, 0, 405),
+	UDim2.new(0.42, -17, 0, 34)
+)
+
+local Refresh = button(
+	Main,
+	"REFRESH",
+	UDim2.fromOffset(14, 443),
+	UDim2.new(0.5, -20, 0, 22)
+)
+
+--==================================================
+-- NOCLIP
+--==================================================
+
+local NoclipConnection
+
+local function startNoclip()
+	if NoclipConnection then
+		NoclipConnection:Disconnect()
+	end
+
+	NoclipConnection = RunService.Stepped:Connect(function()
+		if not Collecting then
+			return
+		end
+
+		if not Character then
+			return
+		end
+
+		for _, part in ipairs(Character:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.CanCollide = false
+			end
+		end
+	end)
+end
+
+local function stopNoclip()
+	if NoclipConnection then
+		NoclipConnection:Disconnect()
+		NoclipConnection = nil
+	end
+
+	if Character then
+		for _, part in ipairs(Character:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.CanCollide = true
+			end
+		end
+	end
+end
+
+--==================================================
+-- TEMP HITBOX
+--==================================================
+
+local OriginalSizes = {}
+
+local function expandHitbox(object)
+	table.clear(OriginalSizes)
+
+	if not object or not object.Parent then
+		return
+	end
+
+	for _, part in ipairs(object:GetDescendants()) do
+		if part:IsA("BasePart") then
+			OriginalSizes[part] = part.Size
+
+			part.Size = part.Size * CONFIG.HitboxMultiplier
+		end
+	end
+
+	if object:IsA("BasePart") then
+		OriginalSizes[object] = object.Size
+		object.Size = object.Size * CONFIG.HitboxMultiplier
+	end
+end
+
+local function restoreHitbox()
+	for part, size in pairs(OriginalSizes) do
+		if part and part.Parent then
+			pcall(function()
+				part.Size = size
+			end)
+		end
+	end
+
+	table.clear(OriginalSizes)
+end
+
+--==================================================
+-- FAST MOVEMENT
+--==================================================
+
+local function moveTo(cframe)
+	updateCharacter()
+
+	if not Root then
+		return false
+	end
+
+	local tween = TweenService:Create(
+		Root,
+		TweenInfo.new(
+			CONFIG.MoveTime,
+			Enum.EasingStyle.Linear,
+			Enum.EasingDirection.Out
+		),
+		{
+			CFrame = cframe
+		}
+	)
+
+	tween:Play()
+	tween.Completed:Wait()
+
+	return Root and Root.Parent ~= nil
+end
+
+--==================================================
+-- PICKUP
+--==================================================
+
+local function invokePickup(object)
+	if not PickupRemote then
+		return false
+	end
+
+	if not object or not object.Parent then
+		return true
+	end
+
+	local success, result = pcall(function()
+		return PickupRemote:InvokeServer(object)
+	end)
+
+	if not success then
+		return false
+	end
+
+	return result ~= false
+end
+
+--==================================================
+-- COLLECT ONE OBJECT
+--==================================================
+
+local function collectObject(object)
+	if not object or not object.Parent then
+		return true
+	end
+
+	updateCharacter()
+
+	if not Root then
+		return false
+	end
+
+	local objectPosition = getPosition(object)
+
+	if not objectPosition then
+		return false
+	end
+
+	expandHitbox(object)
+
+	local underground =
+		objectPosition
+		- Vector3.new(0, CONFIG.UnderMapOffset, 0)
+
+	local probes = {
+		Vector3.new(0, 0, 0),
+		Vector3.new(0, 3, 0),
+		Vector3.new(0, -3, 0),
+		Vector3.new(3, 0, 0),
+		Vector3.new(-3, 0, 0),
+	}
+
+	local collected = false
+
+	for _, offset in ipairs(probes) do
+		if not object.Parent then
+			collected = true
+			break
+		end
+
+		local position = underground + offset
+
+		local targetCFrame = CFrame.lookAt(
+			position,
+			objectPosition
+		)
+
+		if not moveTo(targetCFrame) then
+			break
+		end
+
+		task.wait(CONFIG.PickupDelay)
+
+		if invokePickup(object) then
+			collected = true
+			break
+		end
+	end
+
+	restoreHitbox()
+
+	return collected
+end
+
+--==================================================
+-- RESTORE PLAYER
+--==================================================
+
+local function restorePlayer()
+	updateCharacter()
+
+	if Root and OriginalCFrame then
+		Root.CFrame = OriginalCFrame
+	end
+
+	OriginalCFrame = nil
+end
+
+--==================================================
+-- COLLECT SELECTED ITEM
+--==================================================
+
+local function collectSelectedItem()
+	if Collecting then
+		return
+	end
+
+	if not SelectedItem then
+		Status.Text = "SELECT AN ITEM FIRST"
+		return
+	end
+
+	if not SelectedItem.Parent then
+		Status.Text = "SELECTED ITEM NO LONGER EXISTS"
+		rebuildObjects()
+		rebuildItemList()
+		return
+	end
+
+	updateCharacter()
+
+	if not Root then
+		Status.Text = "CHARACTER NOT READY"
+		return
+	end
+
+	Collecting = true
+	OriginalCFrame = Root.CFrame
+
+	startNoclip()
+
+	Status.Text = "COLLECTING  •  " .. SelectedItem.Name
+
+	local success = collectObject(SelectedItem)
+
+	stopNoclip()
+	restorePlayer()
+
+	if success then
+		Status.Text = "COLLECTED  •  " .. SelectedItem.Name
+	else
+		Status.Text = "PICKUP FAILED  •  " .. SelectedItem.Name
+	end
+
+	Collecting = false
+
+	rebuildObjects()
+	rebuildItemList()
+end
+
+--==================================================
+-- AUTO RARITY COLLECTOR
+--==================================================
+
+local function getAutoTargets()
+	local targets = {}
+
+	for object, info in pairs(LiveObjects) do
+		if object
+			and object.Parent
+			and info
+			and info.Rarity == SelectedRarity then
+
+			table.insert(targets, object)
+		end
+	end
+
+	table.sort(targets, function(a, b)
+		local aPos = getPosition(a)
+		local bPos = getPosition(b)
+
+		if not aPos then
+			return false
+		end
+
+		if not bPos then
+			return true
+		end
+
+		if not Root then
+			return a.Name < b.Name
+		end
+
+		return (aPos - Root.Position).Magnitude
+			< (bPos - Root.Position).Magnitude
+	end)
+
+	return targets
+end
+
+local function autoCollectCycle()
+	if Collecting then
+		return
+	end
+
+	updateCharacter()
+
+	if not Root then
+		return
+	end
+
+	local targets = getAutoTargets()
+
+	if #targets == 0 then
+		Status.Text =
+			"AUTO  •  NO "
+			.. SelectedRarity
+			.. " OBJECTS"
+		return
+	end
+
+	Collecting = true
+
+	if not OriginalCFrame then
+		OriginalCFrame = Root.CFrame
+	end
+
+	startNoclip()
+
+	local collected = 0
+
+	for _, object in ipairs(targets) do
+		if not AutoEnabled then
+			break
+		end
+
+		if object and object.Parent then
+			local success = collectObject(object)
+
+			if success then
+				collected += 1
+			end
+		end
+
+		Status.Text =
+			"AUTO  •  "
+			.. SelectedRarity
+			.. "  •  "
+			.. tostring(collected)
+			.. "/"
+			.. tostring(#targets)
+
+		RunService.Heartbeat:Wait()
+	end
+
+	Collecting = false
+
+	-- AUTO stays at the current collection area while running.
+	-- Position is restored only after AUTO is switched OFF.
+	if not AutoEnabled then
+		stopNoclip()
+		restorePlayer()
+	end
+end
+
+--==================================================
+-- AUTO BUTTON
+--==================================================
+
+Auto.MouseButton1Click:Connect(function()
+	AutoEnabled = not AutoEnabled
+
+	if AutoEnabled then
+		Auto.Text = "AUTO  ON"
+		Auto.BackgroundColor3 = Color3.fromRGB(38, 58, 48)
+
+		updateCharacter()
+
+		if Root and not OriginalCFrame then
+			OriginalCFrame = Root.CFrame
+		end
+
+		Status.Text =
+			"AUTO ON  •  "
+			.. SelectedRarity
+
+	else
+		Auto.Text = "AUTO  OFF"
+		Auto.BackgroundColor3 = Color3.fromRGB(24, 29, 40)
+
+		Collecting = false
+
+		stopNoclip()
+		restorePlayer()
+
+		Status.Text = "AUTO STOPPED"
+	end
+end)
+
+--==================================================
+-- COLLECT ONCE BUTTON
+--==================================================
+
+CollectOnce.MouseButton1Click:Connect(function()
+	task.spawn(collectSelectedItem)
+end)
+
+--==================================================
+-- REFRESH
+--==================================================
+
+Refresh.MouseButton1Click:Connect(function()
+	if Collecting then
+		Status.Text = "CANNOT REFRESH WHILE COLLECTING"
+		return
+	end
+
+	Status.Text = "REFRESHING..."
+
+	task.spawn(function()
+		rebuildIndex()
+		rebuildObjects()
+
+		ItemLabel.Text =
+			"LIVE ITEMS  //  "
+			.. SelectedRarity
+			.. "  ["
+			.. tostring(countObjects(SelectedRarity))
+			.. "]"
+
+		rebuildItemList()
+
+		for _, rarity in ipairs(RARITIES) do
+			local b = RarityButtons[rarity]
+
+			if b then
+				b.Text =
+					rarity
+					.. "   ["
+					.. tostring(countObjects(rarity))
+					.. "]"
+			end
+		end
+
+		Status.Text = "REFRESH COMPLETE"
+	end)
+end)
+
+--==================================================
+-- UI REFRESH LOOP
+--==================================================
+
+task.spawn(function()
+	while Gui.Parent do
+		task.wait(CONFIG.UIInterval)
+
+		for _, rarity in ipairs(RARITIES) do
+			local b = RarityButtons[rarity]
+
+			if b then
+				b.Text =
+					rarity
+					.. "   ["
+					.. tostring(countObjects(rarity))
+					.. "]"
+			end
+		end
+
+		ItemLabel.Text =
+			"LIVE ITEMS  //  "
+			.. SelectedRarity
+			.. "  ["
+			.. tostring(countObjects(SelectedRarity))
+			.. "]"
+
+		-- Don't rebuild the actual list constantly while
+		-- the user is selecting/collecting.
+		if not Collecting then
+			local selectedStillExists =
+				SelectedItem
+				and SelectedItem.Parent
+				and LiveObjects[SelectedItem]
+				and LiveObjects[SelectedItem].Rarity == SelectedRarity
+
+			if not selectedStillExists then
+				SelectedItem = nil
+			end
+		end
+	end
+end)
+
+--==================================================
+-- AUTO LOOP
+--==================================================
+
+task.spawn(function()
+	while Gui.Parent do
+		task.wait(CONFIG.AutoInterval)
+
+		if AutoEnabled and not Collecting then
+			autoCollectCycle()
+		end
+	end
+end)
+
+--==================================================
+-- DYNAMIC INDEX DETECTION
+--==================================================
+
+PlayerGui.ChildAdded:Connect(function(child)
+	task.delay(0.5, function()
+		if not child.Parent then
+			return
+		end
+
+		scanIndex(child)
+
+		if SpawnedObjects then
+			for _, object in ipairs(SpawnedObjects:GetChildren()) do
+				registerObject(object)
+			end
+		end
+	end)
+end)
+
+--==================================================
+-- INITIAL UI
+--==================================================
+
+for _, rarity in ipairs(RARITIES) do
+	RarityButtons[rarity].Text =
+		rarity
+		.. "   ["
+		.. tostring(countObjects(rarity))
+		.. "]"
+end
+
+rebuildItemList()
+
+print("========================================")
+print(" C.R.I.A.O COLLECTOR v2")
+print(" Individual item selection: READY")
+print(" Rarity filtering: READY")
+print(" Auto rarity collection: READY")
+print(" Noclip collection mode: READY")
+print(" Underground pickup: READY")
+print(" Refresh system: READY")
+print("========================================")
