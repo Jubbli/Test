@@ -1,7 +1,4 @@
 | Workspace (Workspace)
-    | Proof of who made the game (Folder)
-        | Game made by Liquid_M3rcury/Ozzonox (Script)
-        | These scripts do nothing, I'm just using them as notes (Script)
     | Camera (Camera)
         | AudioListener (AudioListener)
             | Wire (Wire)
